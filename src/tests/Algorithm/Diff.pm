@@ -766,7 +766,8 @@ sub Get
     Die( 0+@value, " values requested from ",
         $Root, "'s Get in scalar context" );
 }
-"
+
+
 my $Obj= getObjPkg($Root);
 no strict 'refs';
 
@@ -816,7 +817,8 @@ Algorithm::Diff - Compute `intelligent' differences between two files / lists
         print $sep;
         print "> $_"   for  $diff->Items(2);
     }
-"
+
+
     # Alternate interfaces:
 
     use Algorithm::Diff qw(
@@ -829,7 +831,8 @@ Algorithm::Diff - Compute `intelligent' differences between two files / lists
     $count  = LCS_length( \@seq1, \@seq2 );
 
     ( $seq1idxref, $seq2idxref ) = LCSidx( \@seq1, \@seq2 );
-"
+
+
     # Complicated interfaces:
 
     @diffs  = diff( \@seq1, \@seq2 );
@@ -860,7 +863,8 @@ Algorithm::Diff - Compute `intelligent' differences between two files / lists
         \&key_generator,
         @extra_args,
     );
-"
+
+
 =head1 INTRODUCTION
 
 (by Mark-Jason Dominus)
@@ -1475,7 +1479,7 @@ this module (the new OO interface is more powerful and much easier to
 use).
 
 Imagine that there are two arrows.  Arrow A points to an element of
-sequence A, and arrow B points to an element of the sequence B.
+sequence A, and arrow B points to an element of the sequence B. 
 Initially, the arrows point to the first elements of the respective
 sequences.  C<traverse_sequences> will advance the arrows through the
 sequences one element at a time, calling an appropriate user-specified
@@ -1517,9 +1521,9 @@ corresponding index in A or B.
 If arrow A reaches the end of its sequence, before arrow B does,
 C<traverse_sequences> will call the C<A_FINISHED> callback when it
 advances arrow B, if there is such a function; if not it will call
-C<DISCARD_B> instead.  Similarly if arrow B finishes first.
+C<DISCARD_B> instead.  Similarly if arrow B finishes first. 
 C<traverse_sequences> returns when both arrows are at the ends of their
-respective sequences.  It returns true on success and false on failure.
+respective sequences.  It returns true on success and false on failure. 
 At present there is no way to fail.
 
 C<traverse_sequences> may be passed an optional fourth parameter; this
@@ -1578,7 +1582,7 @@ with different order of events.
 C<traverse_balanced> might be a bit slower than C<traverse_sequences>,
 noticable only while processing huge amounts of data.
 
-The C<sdiff> function of this module
+The C<sdiff> function of this module 
 is implemented as call to C<traverse_balanced>.
 
 C<traverse_balanced> does not have a useful return value; you are expected to

@@ -40,4 +40,4 @@ void fail (const char *, ...);
 void pass (void);
 
 #endif /* tests/threads/tests.h */
-"
+

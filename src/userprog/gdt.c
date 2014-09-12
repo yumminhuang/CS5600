@@ -52,7 +52,7 @@ gdt_init (void)
   asm volatile ("lgdt %0" : : "m" (gdtr_operand));
   asm volatile ("ltr %w0" : : "q" (SEL_TSS));
 }
-"
+
 /* System segment or code/data segment? */
 enum seg_class
   {
@@ -135,7 +135,8 @@ make_tss_desc (void *laddr)
 {
   return make_seg_desc ((uint32_t) laddr, 0x67, CLS_SYSTEM, 9, 0, GRAN_BYTE);
 }
-"
+
+
 /* Returns a descriptor that yields the given LIMIT and BASE when
    used as an operand for the LGDT instruction. */
 static uint64_t

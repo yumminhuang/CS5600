@@ -19,7 +19,9 @@ void debug_backtrace (void);
 void debug_backtrace_all (void);
 
 #endif
-""
+
+
+
 /* This is outside the header guard so that debug.h may be
    included multiple times with different settings of NDEBUG. */
 #undef ASSERT

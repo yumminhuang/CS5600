@@ -50,4 +50,4 @@ tests/threads/mlfqs-block.output
 
 #$(MLFQS_OUTPUTS): KERNELFLAGS += -mlfqs
 #$(MLFQS_OUTPUTS): TIMEOUT = 480
-"
+
