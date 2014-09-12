@@ -94,6 +94,7 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
+  list_init (&sleeping_list);
   list_init (&all_list);
 
   /* Set up a thread structure for the running thread. */
@@ -318,13 +319,13 @@ thread_yield (void)
 }
 
 /* Returns true if the wake_time of thread A is less than
- the wake_time of thread B, false otherwise. */
+   the wake_time of thread B, false otherwise. */
 static bool
 wake_time_less (const struct list_elem *a_, const struct list_elem *b_,
                 void *aux UNUSED)
 {
-    const struct thread *a = list_entry (a_, struct thread, allelem);
-    const struct thread *b = list_entry (b_, struct thread, allelem);
+    const struct thread *a = list_entry (a_, struct thread, elem);
+    const struct thread *b = list_entry (b_, struct thread, elem);
     
     return a->wake_time < b->wake_time;
 }
@@ -336,9 +337,7 @@ void thread_sleep (int64_t ticks) {
 
   old_level = intr_disable ();
   if (cur != idle_thread) {
-    // TODO: Use sorted list to enhance performace
-    // list_insert_ordered(&sleeping_list, &cur->elem, wake_time_less, NULL);
-    list_push_back (&sleeping_list, &cur->elem);
+    list_insert_ordered(&sleeping_list, &cur->elem, wake_time_less, NULL);
     cur->status = THREAD_SLEEPING;
     cur->wake_time = timer_ticks() + ticks;
     schedule ();
@@ -494,6 +493,7 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->wake_time = 0;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -584,22 +584,9 @@ thread_schedule_tail (struct thread *prev)
 static void
 schedule (void) 
 {
-  /*
-  struct thread *cur = running_thread ();
-  struct thread *next = next_thread_to_run ();
-  struct thread *prev = NULL;
-
-  ASSERT (intr_get_level () == INTR_OFF);
-  ASSERT (cur->status != THREAD_RUNNING);
-  ASSERT (is_thread (next));
-
-  if (cur != next)
-    prev = switch_threads (cur, next);
-  thread_schedule_tail (prev);
-  */
   struct list_elem *temp, *e = list_begin (&sleeping_list);
   int64_t cur_ticks = timer_ticks();
-    
+
   while (e != list_end (&sleeping_list)) {
     struct thread *t = list_entry (e, struct thread, allelem);
 
@@ -613,8 +600,20 @@ schedule (void)
       list_remove(temp);
     }
     else
-      e = list_next (e);
+      break;
   }
+
+  struct thread *cur = running_thread ();
+  struct thread *next = next_thread_to_run ();
+  struct thread *prev = NULL;
+
+  ASSERT (intr_get_level () == INTR_OFF);
+  ASSERT (cur->status != THREAD_RUNNING);
+  ASSERT (is_thread (next));
+
+  if (cur != next)
+    prev = switch_threads (cur, next);
+  thread_schedule_tail (prev);
 }
 
 /* Returns a tid to use for a new thread. */
