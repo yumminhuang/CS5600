@@ -24,6 +24,9 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* List of processes in THREAD_SLEEPING state. */
+static struct list sleeping_list;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -314,6 +317,36 @@ thread_yield (void)
   intr_set_level (old_level);
 }
 
+
+/* Returns true if the wake_time of thread A is less than
+   the wake_time of thread B, false otherwise. */
+static bool
+wake_time_less (const struct list_elem *a_, const struct list_elem *b_,
+                void *aux UNUSED)
+{
+    const struct thread *a = list_entry (a_, struct thread, allelem);
+    const struct thread *b = list_entry (b_, struct thread, allelem);
+    
+    return a->wake_time < b->wake_time;
+}
+
+/* Change thread state to THREAD_SLEEPING. */
+void thread_sleep (int64_t ticks) {
+  struct thread *cur = thread_current();
+  enum intr_level old_level;
+    
+  old_level = intr_disable ();
+  if (cur != idle_thread) {
+    // TODO: Use sorted list to enhance performace
+    // list_insert_ordered(&sleeping_list, &cur->elem, wake_time_less, NULL);
+    list_push_back (&sleeping_list, &cur->elem);
+    cur->status = THREAD_SLEEPING;
+    cur->wake_time = timer_ticks() + ticks;
+    schedule ();
+  }
+  intr_set_level (old_level);
+}
+
 /* Invoke function 'func' on all threads, passing along 'aux'.
    This function must be called with interrupts off. */
 void
@@ -552,6 +585,7 @@ thread_schedule_tail (struct thread *prev)
 static void
 schedule (void)
 {
+  /*
   struct thread *cur = running_thread ();
   struct thread *next = next_thread_to_run ();
   struct thread *prev = NULL;
@@ -563,6 +597,25 @@ schedule (void)
   if (cur != next)
     prev = switch_threads (cur, next);
   thread_schedule_tail (prev);
+  */
+  struct list_elem *temp, *e = list_begin (&sleeping_list);
+  int64_t cur_ticks = timer_ticks();
+    
+  while (e != list_end (&sleeping_list)) {
+    struct thread *t = list_entry (e, struct thread, allelem);
+    
+    if (cur_ticks >= t->wake_time) {
+      /* Wake this thread up! */
+      list_push_back (&ready_list, &t->elem);
+      t->status = THREAD_READY;
+      temp = e;
+      e = list_next (e);
+        /* Remove this thread from sleeping_list */
+      list_remove(temp);
+    }
+    else
+      e = list_next (e);
+  }
 }
 
 /* Returns a tid to use for a new thread. */
