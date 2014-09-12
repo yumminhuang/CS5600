@@ -21,4 +21,4 @@ test_main (void)
   CHECK (mmap (handle, ACTUAL) != MAP_FAILED, "mmap \"sample.txt\"");
   memcpy (ACTUAL, sample, sizeof sample);
 }
-"
+

@@ -201,4 +201,4 @@ gdtdesc:
 .globl init_ram_pages
 init_ram_pages:
 	.long 0
-"
+
