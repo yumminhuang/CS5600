@@ -493,6 +493,7 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  // thread is not in sleeping_list
   t->wake_time = 0;
   t->magic = THREAD_MAGIC;
 
@@ -587,20 +588,16 @@ schedule (void)
   struct list_elem *temp, *e = list_begin (&sleeping_list);
   int64_t cur_ticks = timer_ticks();
 
-  while (e != list_end (&sleeping_list)) {
-    struct thread *t = list_entry (e, struct thread, allelem);
-
-    if (cur_ticks >= t->wake_time) {
-      /* Wake this thread up! */
-      list_push_back (&ready_list, &t->elem);
-      t->status = THREAD_READY;
-      temp = e;
-      e = list_next (e);
-      /* Remove this thread from sleeping_list */
-      list_remove(temp);
-    }
-    else
-      break;
+  //Check sleeping list
+  for(e = list_begin (&sleeping_list); e != list_end (&sleeping_list); e = list_next (e)) {
+	  struct thread *t = list_entry (e, struct thread, elem);
+	  if (t->wake_time <= timer_ticks()) {
+		  e = (list_remove(&t->elem))->prev;
+		  // Add it into ready list
+		  list_push_back(&ready_list, &t->elem);
+		  t->status = THREAD_READY;
+		  t->wake_time = 0;
+	  }
   }
 
   struct thread *cur = running_thread ();
