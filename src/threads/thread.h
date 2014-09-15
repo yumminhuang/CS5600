@@ -24,6 +24,7 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+#define DONATION_LEVEL 8                /* Limit on depth of nested priority donation. */
 
 /* A kernel thread or user process.
 
@@ -84,24 +85,27 @@ typedef int tid_t;
 struct thread
   {
     /* Owned by thread.c. */
-    tid_t tid;                          /* Thread identifier. */
-    enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
-    uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Priority. */
-    int64_t wake_time;                  /* Ticks before wake sleeping thread. */
-    struct list_elem allelem;           /* List element for all threads list. */
+    tid_t tid;                         /* Thread identifier. */
+    enum thread_status status;         /* Thread state. */
+    char name[16];                     /* Name (for debugging purposes). */
+    uint8_t *stack;                    /* Saved stack pointer. */
+    int priority;                      /* Priority. */
+    int64_t wake_time;                 /* Ticks before wake sleeping thread. */
+    struct list_elem allelem;          /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+    struct list_elem elem;             /* List element. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                  /* Page directory. */
+    uint32_t *pagedir;                 /* Page directory. */
 #endif
 
     /* Owned by thread.c. */
-    unsigned magic;                     /* Detects stack overflow. */
+    unsigned magic;                    /* Detects stack overflow. */
+
+    int don_priority[DONATION_LEVEL];  /* Old priority after the thread got a donation. */
+    struct thread * accepter;          /* Thread that received the donation. */
   };
 
 /* If false (default), use round-robin scheduler.
