@@ -379,8 +379,23 @@ thread_set_priority (int new_priority)
 {
   ASSERT (new_priority <= PRI_MAX && new_priority >= PRI_MIN);
 
-  // struct thread *t = thread_current();
-  thread_current ()->priority = new_priority;
+  struct thread *t = thread_current();
+
+  int old_level = intr_disable();
+  int i, min = PRI_MAX + 1;
+  for(i = 0; i < DONATION_LEVEL; i++)
+    if((t->don_priority[i] != -1) && (t->don_priority[i] < min))
+      min = t->don_priority[i];
+
+  if(min < PRI_MAX + 1) {
+    for(i = 0; i < DONATION_LEVEL; i++)
+      if(t->don_priority[i] == min)
+        t->don_priority[i] = new_priority;
+  } else {
+    t->priority = new_priority;
+    thread_yield();
+  }
+  intr_set_level(old_level);
 }
 
 /* Returns the current thread's priority. */
@@ -511,6 +526,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->wake_time = 0;
   t->magic = THREAD_MAGIC;
   t->accepter = NULL;
+  int i;
+  for(i = 0; i < DONATION_LEVEL; i++)
+    t->don_priority[i] = -1;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -540,8 +558,20 @@ next_thread_to_run (void)
 {
   if (list_empty (&ready_list))
     return idle_thread;
-  else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  else {
+    struct list_elem *e;
+    struct thread *ret = NULL;
+
+    // Find the thread with the highest priority
+    for(e = list_begin(&ready_list); e != list_end(&ready_list); e = list_next(e)) {
+      struct thread *t = list_entry(e, struct thread, elem);
+      if((ret == NULL) || ret->priority < t->priority)
+        ret = t;
+    }
+    // Remove from ready list
+    list_remove(&ret->elem);
+    return ret;
+  }
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -600,7 +630,7 @@ thread_schedule_tail (struct thread *prev)
 static void
 schedule (void)
 {
-  struct list_elem *temp;
+  struct list_elem *temp, *e;
   int64_t cur_ticks = timer_ticks();
 
   // Check sleeping list
@@ -648,3 +678,4 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
