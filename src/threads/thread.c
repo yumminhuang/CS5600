@@ -636,7 +636,7 @@ schedule (void)
   // Check sleeping list
   for(e = list_begin(&sleeping_list); e != list_end(&sleeping_list); e = list_next(e)) {
 
-	  struct thread *t = list_entry(e, struct thread, elem);
+	struct thread *t = list_entry(e, struct thread, elem);
 
     if (t->wake_time <= timer_ticks()) {
 		  e = (list_remove(&t->elem))->prev;
@@ -678,4 +678,3 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
-

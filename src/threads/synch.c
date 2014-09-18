@@ -134,7 +134,13 @@ sema_up (struct semaphore *sema)
         // Assigne the new priority
         t->accepter->priority = max;
         t->accepter = NULL;
-      }
+      } else {
+    	  // Delete priority
+          int i;
+          for(i = 0; i < DONATION_LEVEL; i++)
+        	if(t->accepter->don_priority[i] == t->priority)
+        	  t->accepter->don_priority[i] = -1;
+        }
     }
   }
   sema->value++;
@@ -428,4 +434,3 @@ thread_high_priority(struct semaphore *sema)
 
   return t;
 }
-
