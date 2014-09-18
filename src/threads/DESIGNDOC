@@ -8,8 +8,7 @@
 
 >> Fill in the names and email addresses of your group members.
 
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
+Borui Gu <@ccs.neu.edu>
 Yaming Huang <yummin@ccs.neu.edu>
 
 ---- PRELIMINARIES ----
@@ -34,6 +33,9 @@ ALARM CLOCK
 
 >> A2: Briefly describe what happens in a call to timer_sleep(),
 >> including the effects of the timer interrupt handler.
+
+When system call timer_sleep(), system will put current thread into sleeping
+list, then this thread will sleep the given ticks.
 
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
@@ -95,7 +97,7 @@ want--these questions are just to spur your thoughts.  You may also
 choose to respond anonymously in the course evaluations at the end of
 the quarter.
 
->> In your opinion, was this assignment, or any one of the three problems
+>> In your opinion, was this assignment, or any one of the two problems
 >> in it, too easy or too hard?  Did it take too long or too little time?
 
 >> Did you find that working on a particular part of the assignment gave
