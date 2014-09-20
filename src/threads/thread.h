@@ -102,10 +102,10 @@ struct thread
 #endif
 
     /* Owned by thread.c. */
-    unsigned magic;                    /* Detects stack overflow. */
-
-    int don_priority[DONATION_LEVEL];  /* Old priority after the thread got a donation. */
+	int don_priority[DONATION_LEVEL];  /* Old priority after the thread got a donation. */
     struct thread * accepter;          /* Thread that received the donation. */
+	
+    unsigned magic;                    /* Detects stack overflow. */    
   };
 
 /* If false (default), use round-robin scheduler.
@@ -146,3 +146,4 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 #endif /* threads/thread.h */
+
