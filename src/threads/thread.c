@@ -383,16 +383,19 @@ thread_set_priority (int new_priority)
   struct thread *t = thread_current();
 
   int old_level = intr_disable();
-  int i, min = PRI_MAX + 1;
-  for(i = 0; i < DONATION_LEVEL; i++)
-    if((t->don_priority[i] != -1) && (t->don_priority[i] < min))
-      min = t->don_priority[i];
+  int i, is_donated = 0;
+  for (i = 0; i < DONATION_LEVEL; i++)
+    if (t->don_priority[i] != -1){
+      is_donated = 1;
+	  break;
+	}
 
-  if(min < PRI_MAX + 1) {
+  if (is_donated) {
 	/*If the thread has donated priority*/
-    for(i = 0; i < DONATION_LEVEL; i++)
-      if(t->don_priority[i] == min)
+    for (i = 0; i < DONATION_LEVEL; i++)      
+	  if (t->don_priority[i] != -1)
         t->don_priority[i] = new_priority;
+		
 	if (new_priority > t->priority){
 	  t->priority = new_priority;
 	  thread_yield();
