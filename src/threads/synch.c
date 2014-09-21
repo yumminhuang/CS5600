@@ -123,26 +123,29 @@ sema_up (struct semaphore *sema)
 
     if(t->accepter != NULL) {
       if(t->accepter->priority == t->priority) {
-    	// The donated priority is same as the priority of the running thread.
+        // The donated priority is same as the priority of the running thread.
         int i, max = -1;
+
         // Get the maximum priority in donation priorities.
         for(i = 0; i < DONATION_LEVEL; i++)
-          if(t->accepter->don_priority[i] > max)
-            max = t->accepter->don_priority[i];
+          if(t->accepter->old_priorities[i] > max)
+            max = t->accepter->old_priorities[i];
+
         // Delete priority
         for(i = 0; i < DONATION_LEVEL; i++)
-          if(t->accepter->don_priority[i] == max)
-            t->accepter->don_priority[i] = -1;
+          if(t->accepter->old_priorities[i] == max)
+            t->accepter->old_priorities[i] = -1;
+
         // Assign the new priority
         t->accepter->priority = max;
         t->accepter = NULL;
       } else {
-    	  // Delete priority
-          int i;
-          for(i = 0; i < DONATION_LEVEL; i++)
-        	if(t->accepter->don_priority[i] == t->priority)
-        	  t->accepter->don_priority[i] = -1;
-        }
+        // Delete priority
+        int i;
+        for(i = 0; i < DONATION_LEVEL; i++)
+        if(t->accepter->old_priorities[i] == t->priority)
+          t->accepter->old_priorities[i] = -1;
+      }
     }
   }
 
@@ -237,12 +240,12 @@ lock_acquire (struct lock *lock)
 
     if(holder->priority < cur->priority) {
       cur->accepter = holder;
-      /* Priority Donation */
+      /* Priority donation */
       int i;
       // Save the old priority
       for (i = 0; i < DONATION_LEVEL; i++) {
-        if(holder->don_priority[i] == -1) {
-          holder->don_priority[i] = holder->priority;
+        if(holder->old_priorities[i] == -1) {
+          holder->old_priorities[i] = holder->priority;
           break;
         }
       }
