@@ -29,6 +29,43 @@ ALARM CLOCK
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+struct thread {
+    /* Owned by thread.c. */
+    tid_t tid;                         /* Thread identifier. */
+    enum thread_status status;         /* Thread state. */
+    char name[16];                     /* Name (for debugging purposes). */
+    uint8_t *stack;                    /* Saved stack pointer. */
+    int priority;                      /* Priority. */
+    int64_t wake_time;                 /* Ticks before wake sleeping thread. */
+    struct list_elem allelem;          /* List element for all threads list. */
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;             /* List element. */
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                 /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;                    /* Detects stack overflow. */
+  };
+Add a new member 'int64_t wake_time', which is ticks before waking the sleeping
+thread.
+
+enum thread_status
+  {
+    THREAD_RUNNING,     /* Running thread. */
+    THREAD_READY,       /* Not running but ready to run. */
+    THREAD_BLOCKED,     /* Waiting for an event to trigger. */
+    THREAD_DYING,       /* About to be destroyed. */
+    THREAD_SLEEPING     /* Sleeping thread. */
+  };
+Add a new state 'THREAD_SLEEPING' that denotes a sleeping thread.
+
+static struct list sleeping_list;
+Add a new list 'sleeping_list', which is a list of sleeping threads.
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe what happens in a call to timer_sleep(),
@@ -36,9 +73,14 @@ ALARM CLOCK
 
 When system call timer_sleep(), system will put current thread into sleeping
 list, then this thread will sleep the given ticks.
+Every time the system calls schedule(), it will check is there any thread
+need to be wake up.
 
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
+
+We use a sorted list to store sleeping threads in ascending order. The timer
+interrupt handler can find the thread with minimum wake_time in O(1).
 
 ---- SYNCHRONIZATION ----
 
@@ -50,7 +92,7 @@ list, then this thread will sleep the given ticks.
 
 ---- RATIONALE ----
 
->> A6: Why did you choose this design?  In what ways is it superior to
+>> A6: Why did you choose this design? In what ways is it superior to
 >> another design you considered?
 
 PRIORITY SCHEDULING
@@ -61,6 +103,39 @@ PRIORITY SCHEDULING
 >> B1: Copy here the declaration of each new or changed `struct' or
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
+
+#define DONATION_LEVEL 8      /* Limit on depth of nested priority donation. */
+We impose a limit on depth of nested priority donation.
+
+struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                         /* Thread identifier. */
+    enum thread_status status;         /* Thread state. */
+    char name[16];                     /* Name (for debugging purposes). */
+    uint8_t *stack;                    /* Saved stack pointer. */
+    int priority;                      /* Priority. */
+    int64_t wake_time;                 /* Ticks before wake sleeping thread. */
+    struct list_elem allelem;          /* List element for all threads list. */
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;             /* List element. */
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                 /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;                    /* Detects stack overflow. */
+
+    int old_priorities[DONATION_LEVEL];
+    struct thread * accepter;          /* Thread that received the donation. */
+  };
+  Add a new member 'int old_priorities[DONATION_LEVEL]'
+  Add a new member 'struct thread * accepter', which is the thread that receive
+  a priority donation.
+
 
 >> B2: Explain the data structure used to track priority donation.
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
