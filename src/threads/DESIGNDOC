@@ -8,7 +8,7 @@
 
 >> Fill in the names and email addresses of your group members.
 
-Borui Gu <@ccs.neu.edu>
+Borui Gu <borui@ccs.neu.edu>
 Yaming Huang <yummin@ccs.neu.edu>
 
 ---- PRELIMINARIES ----
@@ -72,9 +72,9 @@ Add a new list 'sleeping_list', which is a list of sleeping threads.
 >> including the effects of the timer interrupt handler.
 
 When system call timer_sleep(), system will put current thread into sleeping
-list, then this thread will sleep the given ticks.
-Every time the system calls schedule(), it will check is there any thread
-need to be wake up.
+list, then this thread will sleep the given ticks. Every time the system calls
+schedule(), it will check is there any thread need to be wake up.
+Interrupts are off during that process to avoid race conditions.
 
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
@@ -87,13 +87,20 @@ interrupt handler can find the thread with minimum wake_time in O(1).
 >> A4: How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
 
+The interrupts are turned off in thread_sleep(), which is called during a call
+to timer_sleep().
+
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
+
+The system turns off the interrupts in thread_sleep(), which is called
+during a call to timer_sleep().
 
 ---- RATIONALE ----
 
 >> A6: Why did you choose this design? In what ways is it superior to
 >> another design you considered?
+Follow the hints provided by Profession Wilson.
 
 PRIORITY SCHEDULING
 ===================
@@ -141,16 +148,58 @@ struct thread
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
 >> .png file.)
 
+Each thread has an integer array which saves previous priorities that was
+received before a new donation.
+Each thread that donates it's priority saves the accepter of the priority in
+it's pointer to that thread.
+
++-------------+            +-------------+           +-------------+
+|  Thread 1   | donate     |  Thread 2   | donate    |  Thread 3   |
+| priority=50 | priority   | priority=50 | priority  | priority=50 |
+|             |<-----------+             |<----------+             |
+|old priority | accepter   |old priority | accepter  |             |
+|=[30, 40]    |            |=[40]        |           |             |
+|             |            |             |           |             |
++------+------+      +-----+------+------+     +-----+-------------+
+       |             |            |            |
+       |             |            |            |
+ Hold  |   +---------+      Hold  |  +---------+
+       |   | try acquire          |  | try acquire
+       v   v                      v  v
+  +---------+               +---------+
+  |  Lock 1 |               |  Lock 2 |
+  +---------+               +---------+
+
 ---- ALGORITHMS ----
 
 >> B3: How do you ensure that the highest priority thread waiting for
 >> a lock, semaphore, or condition variable wakes up first?
 
+Traverse the thread list to find the thread with the highest priority.
+
 >> B4: Describe the sequence of events when a call to lock_acquire()
 >> causes a priority donation.  How is nested donation handled?
 
+A lock was held by a thread with a lower priority, then a thread with a
+higher priority try to acquire the lock. This scenario will cause a priority
+donation.
+
+The system will track all threads by the pointer that points to donation
+accepter and change their priorities.
+
 >> B5: Describe the sequence of events when lock_release() is called
 >> on a lock that a higher-priority thread is waiting for.
+
+lock_release() will call sema_up(). sema_up() has a reverse process of
+priority donation. If the thread that wakes up from the waiters has an
+entry in its accepter pointer, we compare it against the current thread,
+since this is the thread he must have donated his priority to.
+We check whether the current thread has the same priority of waking up
+threads. If it is the same, we find the maximum value on the current threads
+old priorities and assign it to the current thread. Otherwise the priority
+of the waking up thread must be in the old priorities of the current thread
+and we simply delete it from that list. Then set the accepter pointer of the
+waking up thread as NULL and call thread yield.
 
 ---- SYNCHRONIZATION ----
 
@@ -158,10 +207,24 @@ struct thread
 >> how your implementation avoids it.  Can you use a lock to avoid
 >> this race?
 
+A race condition can happen if the check for donation for the threads returns
+false, then it is allowed to set a new priority immediatly, but before the new
+priority is set and after the check for priority donation a interrupt occurs.
+If it leads to a donation to this thread and lowers it's priority immediatly
+after the donation, a race may occur. To avoid this potential race, the
+interrupts are turned off. So a race condition can't happen.
+
+Theoretically, We can lock the operation of setting priority to avoid this
+race condition.
+
 ---- RATIONALE ----
 
 >> B7: Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
+
+We add only two members in the thread structure, which is easy to implement and
+understand. We use an integer array to save old prioritis to handle nested
+donation.
 
 SURVEY QUESTIONS
 ================
@@ -175,14 +238,27 @@ the quarter.
 >> In your opinion, was this assignment, or any one of the two problems
 >> in it, too easy or too hard?  Did it take too long or too little time?
 
+Since Professor Wilson provided some hints on class, it's quite easy to
+solve the first problem. However, we still took some time to solve the second
+problem.
+
 >> Did you find that working on a particular part of the assignment gave
 >> you greater insight into some aspect of OS design?
+
+Yes. The project 1 help me understand how thread scheduling and lock works.
 
 >> Is there some particular fact or hint we should give students in
 >> future quarters to help them solve the problems?  Conversely, did you
 >> find any of our guidance to be misleading?
 
+Perhaps you should point out that the code you gave on the project 1 slide
+is not the whole solution.
+
 >> Do you have any suggestions for the TAs to more effectively assist
 >> students, either for future quarters or the remaining projects?
 
+No.
+
 >> Any other comments?
+
+No.
