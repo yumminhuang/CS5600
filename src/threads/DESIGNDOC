@@ -100,6 +100,7 @@ during a call to timer_sleep().
 
 >> A6: Why did you choose this design? In what ways is it superior to
 >> another design you considered?
+Follow the hints provided by Profession Wilson.
 
 PRIORITY SCHEDULING
 ===================
@@ -147,9 +148,9 @@ struct thread
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
 >> .png file.)
 
-Each thread has an integer array which saves previous priorities that was 
+Each thread has an integer array which saves previous priorities that was
 received before a new donation.
-Each thread that donates it's priority saves the accepter of the priority in 
+Each thread that donates it's priority saves the accepter of the priority in
 it's pointer to that thread.
 
 +-------------+            +-------------+           +-------------+
@@ -160,14 +161,14 @@ it's pointer to that thread.
 |=[30, 40]    |            |=[40]        |           |             |
 |             |            |             |           |             |
 +------+------+      +-----+------+------+     +-----+-------------+
-       |             |            |            |                   
-       |             |            |            |                   
- Hold  |   +---------+      Hold  |  +---------+                   
-       |   | try acquire          |  | try acquire               
-       v   v                      v  v                                                                                            
-  +---------+               +---------+                            
-  |  Lock 1 |               |  Lock 2 |                            
-  +---------+               +---------+                            
+       |             |            |            |
+       |             |            |            |
+ Hold  |   +---------+      Hold  |  +---------+
+       |   | try acquire          |  | try acquire
+       v   v                      v  v
+  +---------+               +---------+
+  |  Lock 1 |               |  Lock 2 |
+  +---------+               +---------+
 
 ---- ALGORITHMS ----
 
@@ -190,10 +191,10 @@ accepter and change their priorities.
 >> on a lock that a higher-priority thread is waiting for.
 
 lock_release() will call sema_up(). sema_up() has a reverse process of
-priority donation. If the thread that wakes up from the waiters has an 
+priority donation. If the thread that wakes up from the waiters has an
 entry in its accepter pointer, we compare it against the current thread,
 since this is the thread he must have donated his priority to.
-We check whether the current thread has the same priority of waking up 
+We check whether the current thread has the same priority of waking up
 threads. If it is the same, we find the maximum value on the current threads
 old priorities and assign it to the current thread. Otherwise the priority
 of the waking up thread must be in the old priorities of the current thread
@@ -206,10 +207,24 @@ waking up thread as NULL and call thread yield.
 >> how your implementation avoids it.  Can you use a lock to avoid
 >> this race?
 
+A race condition can happen if the check for donation for the threads returns
+false, then it is allowed to set a new priority immediatly, but before the new
+priority is set and after the check for priority donation a interrupt occurs.
+If it leads to a donation to this thread and lowers it's priority immediatly
+after the donation, a race may occur. To avoid this potential race, the
+interrupts are turned off. So a race condition can't happen.
+
+Theoretically, We can lock the operation of setting priority to avoid this
+race condition.
+
 ---- RATIONALE ----
 
 >> B7: Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
+
+We add only two members in the thread structure, which is easy to implement and
+understand. We use an integer array to save old prioritis to handle nested
+donation.
 
 SURVEY QUESTIONS
 ================
