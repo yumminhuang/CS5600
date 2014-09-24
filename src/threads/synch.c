@@ -118,20 +118,22 @@ sema_up (struct semaphore *sema)
   old_level = intr_disable ();
 
   if (!list_empty (&sema->waiters)) {
+	// Wake up the thread with the highest priority from SEMA waiters.
     struct thread *t = thread_high_priority(sema);
     thread_unblock (t);
 
     if(t->accepter != NULL) {
+      // Priority has been donated before
       if(t->accepter->priority == t->priority) {
-        // The donated priority is same as the priority of the running thread.
-        int i, max = -1;
+    	// Priority has been donated directly to another thread
+        int i, max = PRI_MIN - 1;
 
-        // Get the maximum priority in donation priorities.
+        // Get the highest priority in old priorities.
         for(i = 0; i < DONATION_LEVEL; i++)
           if(t->accepter->old_priorities[i] > max)
             max = t->accepter->old_priorities[i];
 
-        // Delete priority
+        // Delete the highest priority
         for(i = 0; i < DONATION_LEVEL; i++)
           if(t->accepter->old_priorities[i] == max)
             t->accepter->old_priorities[i] = -1;
@@ -140,7 +142,6 @@ sema_up (struct semaphore *sema)
         t->accepter->priority = max;
         t->accepter = NULL;
       } else {
-        // Delete priority
         int i;
         for(i = 0; i < DONATION_LEVEL; i++)
         if(t->accepter->old_priorities[i] == t->priority)
@@ -249,6 +250,8 @@ lock_acquire (struct lock *lock)
           break;
         }
       }
+      if (i == DONATION_LEVEL)
+    	PANIC("The maximum depth of nested donation is 8.");
       // Set new priority for lock holder
       holder->priority = cur->priority;
       // Donation chain: assign the new priority for all threads
@@ -389,9 +392,12 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
     int max = -1;
 
     // Find the thread with the highest priority
-    for(e = list_begin(&cond->waiters); e != list_end(&cond->waiters); e = list_next(e)) {
+    for(e = list_begin(&cond->waiters);
+    	e != list_end(&cond->waiters);
+    	e = list_next(e)) {
       struct semaphore_elem *tmp = list_entry(e, struct semaphore_elem, elem);
-      struct thread *t = list_entry(list_front(&(&tmp->semaphore)->waiters), struct thread, elem);
+      struct thread *t = list_entry(list_front(&(&tmp->semaphore)->waiters),
+    		  	  	  	  	  	     struct thread, elem);
 
       if(t->priority > max) {
         max = t->priority;
@@ -430,7 +436,9 @@ thread_high_priority(struct semaphore *sema)
 
   int old_level = intr_disable();
 
-  for(e = list_begin(&sema->waiters); e != list_end(&sema->waiters); e = list_next(e)) {
+  for(e = list_begin(&sema->waiters);
+	  e != list_end(&sema->waiters);
+	  e = list_next(e)) {
     struct thread *tmp = list_entry(e, struct thread, elem);
     if((t==NULL) || t->priority < tmp->priority)
       t = tmp;
