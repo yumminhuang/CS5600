@@ -123,7 +123,7 @@ sema_up (struct semaphore *sema)
     thread_unblock (t);
 
     if(t->accepter != NULL) {
-      // Priority has been donated before
+      // Have donated priority to other thread
       if(t->accepter->priority == t->priority) {
     	// Priority has been donated directly to another thread
         int i, max = PRI_MIN - 1;
@@ -144,8 +144,8 @@ sema_up (struct semaphore *sema)
       } else {
         int i;
         for(i = 0; i < DONATION_LEVEL; i++)
-		  if(t->accepter->old_priorities[i] == t->priority)
-			t->accepter->old_priorities[i] = -1;
+        if(t->accepter->old_priorities[i] == t->priority)
+          t->accepter->old_priorities[i] = -1;
       }
     }
   }
@@ -427,7 +427,8 @@ cond_broadcast (struct condition *cond, struct lock *lock)
     cond_signal (cond, lock);
 }
 
-/* Get the thread with the highest priority in a semaphore. */
+/* Get the thread with the highest priority in a semaphore
+   and remove it from waiter list */
 static struct thread *
 thread_high_priority(struct semaphore *sema)
 {
