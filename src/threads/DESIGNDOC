@@ -141,7 +141,7 @@ struct thread
     struct thread * accepter;          /* Thread that received the donation. */
   };
 Add a new member 'int old_priorities[DONATION_LEVEL]', which records the priority of this thread before it receive a priority donation.
-Add a new member 'struct thread * accepter', which is the threads that received priority donation from this thread.
+Add a new member 'struct thread * accepter', which is the thread that received priority donation from this thread.
 
 
 >> B2: Explain the data structure used to track priority donation.
