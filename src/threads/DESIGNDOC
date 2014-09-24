@@ -36,7 +36,7 @@ struct thread {
     char name[16];                     /* Name (for debugging purposes). */
     uint8_t *stack;                    /* Saved stack pointer. */
     int priority;                      /* Priority. */
-    int64_t wake_time;                 /* Ticks before wake sleeping thread. */
+    int64_t wake_time;                 /* Tick when sleeping thread should be waked. */
     struct list_elem allelem;          /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
@@ -50,8 +50,8 @@ struct thread {
     /* Owned by thread.c. */
     unsigned magic;                    /* Detects stack overflow. */
   };
-Add a new member 'int64_t wake_time', which is ticks before waking the sleeping
-thread.
+Add a new member 'int64_t wake_time', which is the tick that the sleeping thread should be waked.
+
 
 enum thread_status
   {
@@ -62,6 +62,7 @@ enum thread_status
     THREAD_SLEEPING     /* Sleeping thread. */
   };
 Add a new state 'THREAD_SLEEPING' that denotes a sleeping thread.
+
 
 static struct list sleeping_list;
 Add a new list 'sleeping_list', which is a list of sleeping threads.
@@ -122,7 +123,7 @@ struct thread
     char name[16];                     /* Name (for debugging purposes). */
     uint8_t *stack;                    /* Saved stack pointer. */
     int priority;                      /* Priority. */
-    int64_t wake_time;                 /* Ticks before wake sleeping thread. */
+    int64_t wake_time;                 /* Tick when sleeping thread should be waked. */
     struct list_elem allelem;          /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
