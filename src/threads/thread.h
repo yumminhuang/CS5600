@@ -103,7 +103,7 @@ struct thread
 #endif
 
     /* Owned by thread.c. */
-    int old_priorities[DONATION_LEVEL];
+    int old_priority;
     /* Old priorities before the thread get donation. */
     struct thread * accepter;          /* Thread that received the donation. */
 

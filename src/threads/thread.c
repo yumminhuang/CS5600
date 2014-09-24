@@ -540,9 +540,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   t->accepter = NULL;
 
-  int i;
-  for(i = 0; i < DONATION_LEVEL; i++)
-    t->old_priorities[i] = -1;
+  int i;  
+  t->old_priority = -1;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
