@@ -126,12 +126,26 @@ sema_up (struct semaphore *sema)
       // Have donated priority to other thread
       if(t->accepter->priority == t->priority) {
     	// Priority has been donated directly to another thread
+        int i, max = PRI_MIN - 1;
+
+        // Get the highest priority in old priorities.
+        for(i = 0; i < DONATION_LEVEL; i++)
+          if(t->accepter->old_priorities[i] > max)
+            max = t->accepter->old_priorities[i];
+
+        // Delete the highest priority
+        for(i = 0; i < DONATION_LEVEL; i++)
+          if(t->accepter->old_priorities[i] == max)
+            t->accepter->old_priorities[i] = -1;
+
         // Assign the new priority
-        t->accepter->priority = t->accepter->old_priority;
-		t->accepter->old_priority = -1;
+        t->accepter->priority = max;
         t->accepter = NULL;
       } else {
-        t->accepter->old_priority = -1;
+        int i;
+        for(i = 0; i < DONATION_LEVEL; i++)
+        if(t->accepter->old_priorities[i] == t->priority)
+          t->accepter->old_priorities[i] = -1;
       }
     }
   }
@@ -228,8 +242,16 @@ lock_acquire (struct lock *lock)
     if(holder->priority < cur->priority) {
       cur->accepter = holder;
       /* Priority donation */
+      int i;
       // Save the old priority
-      holder->old_priority= holder->priority;      
+      for (i = 0; i < DONATION_LEVEL; i++) {
+        if(holder->old_priorities[i] == -1) {
+          holder->old_priorities[i] = holder->priority;
+          break;
+        }
+      }
+      if (i == DONATION_LEVEL)
+    	PANIC("The maximum depth of nested donation is 8.");
       // Set new priority for lock holder
       holder->priority = cur->priority;
       // Donation chain: assign the new priority for all threads
