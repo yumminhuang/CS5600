@@ -114,6 +114,7 @@ PRIORITY SCHEDULING
 #define DONATION_LEVEL 8      /* Limit on depth of nested priority donation. */
 We impose a limit on depth of nested priority donation.
 
+
 struct thread
   {
     /* Owned by thread.c. */
@@ -139,19 +140,18 @@ struct thread
     int old_priorities[DONATION_LEVEL];
     struct thread * accepter;          /* Thread that received the donation. */
   };
-  Add a new member 'int old_priorities[DONATION_LEVEL]'
-  Add a new member 'struct thread * accepter', which is the thread that receive
-  a priority donation.
+Add a new member 'int old_priorities[DONATION_LEVEL]', which records the priority of this thread before it receive a priority donation.
+Add a new member 'struct thread * accepter', which is the threads that received priority donation from this thread.
 
 
 >> B2: Explain the data structure used to track priority donation.
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
 >> .png file.)
 
-Each thread has an integer array which saves previous priorities that was
-received before a new donation.
-Each thread that donates it's priority saves the accepter of the priority in
-it's pointer to that thread.
+Each thread has an integer array('old_priorities[DONATION_LEVEL]') 
+which saves previous priorities that was received before a new 
+donation.
+Each thread that donates it's priority saves the accepter of the priority in it's pointer to that thread('accepter').
 
 +-------------+            +-------------+           +-------------+
 |  Thread 1   | donate     |  Thread 2   | donate    |  Thread 3   |
