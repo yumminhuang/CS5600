@@ -381,22 +381,13 @@ thread_set_priority (int new_priority)
   ASSERT (new_priority <= PRI_MAX && new_priority >= PRI_MIN);
 
   struct thread *t = thread_current();
-  int i, min = PRI_MAX + 1;
+  int i;
 
   int old_level = intr_disable();
 
-  for(i = 0; i < DONATION_LEVEL; i++)
-    if((t->old_priorities[i] != -1) && (t->old_priorities[i] < min))
-      /* Priority donation will donate a higher priority to another
-       * thread, so the minimum value in old_priorities is its original
-       * priority. */
-      min = t->old_priorities[i];
-
-  if(min < PRI_MAX + 1) {
+  if(old_priority != -1) {
     // The thread has donated its priority.
-    for(i = 0; i < DONATION_LEVEL; i++)
-      if(t->old_priorities[i] == min)
-        t->old_priorities[i] = new_priority;
+    t->old_priority = new_priority;
 
     if (new_priority > t->priority){
       // The new priority is higher than the effective priority.
