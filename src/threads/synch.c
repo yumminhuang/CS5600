@@ -258,6 +258,16 @@ lock_acquire (struct lock *lock)
       struct thread *t = holder;
       while(t->accepter != NULL) {
         t = t->accepter;
+		
+		for (i = 0; i < DONATION_LEVEL; i++) {
+          if(t->old_priorities[i] == -1) {
+            t->old_priorities[i] = t->priority;
+            break;
+          }
+		}
+		if (i == DONATION_LEVEL)
+		  PANIC("The maximum depth of nested donation is 8.");
+		
         t->priority = cur->priority;
       }
     }
