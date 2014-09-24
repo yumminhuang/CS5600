@@ -385,7 +385,7 @@ thread_set_priority (int new_priority)
 
   int old_level = intr_disable();
 
-  if(old_priority != -1) {
+  if(t->old_priority != -1) {
     // The thread has donated its priority.
     t->old_priority = new_priority;
 
