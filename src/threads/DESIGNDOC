@@ -50,7 +50,7 @@ struct thread {
     /* Owned by thread.c. */
     unsigned magic;                    /* Detects stack overflow. */
   };
-Add a new member 'int64_t wake_time', which is the tick that the sleeping thread should be waked.
+Add a new member 'int64_t wake_time', which is the tick that the sleeping thread should be wake up.
 
 
 enum thread_status
@@ -72,36 +72,35 @@ Add a new list 'sleeping_list', which is a list of sleeping threads.
 >> A2: Briefly describe what happens in a call to timer_sleep(),
 >> including the effects of the timer interrupt handler.
 
-When system call timer_sleep(), system will put current thread into sleeping
-list, then this thread will sleep the given ticks. Every time the system calls
-schedule(), it will check is there any thread need to be wake up.
+timer_sleep() will call a help function thread_sleep(), which will put current thread into sleeping list, set status to THREAD_SLEEPING and set wake_time of the thread. Then it will call schedule() to let CPU run another thread, while this thread will sleep the given ticks. Every time the system calls schedule(), it will check is there any thread need to be wake up.
 Interrupts are off during that process to avoid race conditions.
 
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
 
-We use a sorted list to store sleeping threads in ascending order. The timer
-interrupt handler can find the thread with minimum wake_time in O(1).
+We use a sorted list to store sleeping threads in ascending order of wake_time. 
+The timer interrupt handler can find the thread with minimum wake_time in O(1).
 
 ---- SYNCHRONIZATION ----
 
 >> A4: How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
 
-The interrupts are turned off in thread_sleep(), which is called during a call
-to timer_sleep().
+The interrupts are turned off in thread_sleep(), 
+which is called during a call to timer_sleep().
 
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
 
-The system turns off the interrupts in thread_sleep(), which is called
-during a call to timer_sleep().
+The system turns off the interrupts in thread_sleep(), 
+which is called during a call to timer_sleep().
 
 ---- RATIONALE ----
 
 >> A6: Why did you choose this design? In what ways is it superior to
 >> another design you considered?
-Follow the hints provided by Profession Wilson.
+
+Follow the hints provided by Professor Wilson.
 
 PRIORITY SCHEDULING
 ===================
