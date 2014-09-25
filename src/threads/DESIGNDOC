@@ -36,7 +36,7 @@ struct thread {
     char name[16];                     /* Name (for debugging purposes). */
     uint8_t *stack;                    /* Saved stack pointer. */
     int priority;                      /* Priority. */
-    int64_t wake_time;                 /* Ticks before wake sleeping thread. */
+    int64_t wake_time;                 /* Tick when sleeping thread should be waked. */
     struct list_elem allelem;          /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
@@ -50,8 +50,8 @@ struct thread {
     /* Owned by thread.c. */
     unsigned magic;                    /* Detects stack overflow. */
   };
-Add a new member 'int64_t wake_time', which is ticks before waking the sleeping
-thread.
+Add a new member 'int64_t wake_time', which is the tick that the sleeping
+thread should be wake up.
 
 enum thread_status
   {
@@ -71,36 +71,40 @@ Add a new list 'sleeping_list', which is a list of sleeping threads.
 >> A2: Briefly describe what happens in a call to timer_sleep(),
 >> including the effects of the timer interrupt handler.
 
-When system call timer_sleep(), system will put current thread into sleeping
-list, then this thread will sleep the given ticks. Every time the system calls
+timer_sleep() will call a help function thread_sleep(), which will put current
+thread into sleeping list, set status to THREAD_SLEEPING and set wake_time of
+the thread. Then it will call schedule() to let CPU run another thread, while
+this thread will sleep the given ticks. Every time the system calls
 schedule(), it will check is there any thread need to be wake up.
 Interrupts are off during that process to avoid race conditions.
 
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
 
-We use a sorted list to store sleeping threads in ascending order. The timer
-interrupt handler can find the thread with minimum wake_time in O(1).
+We use a sorted list to store sleeping threads in ascending order of wake_time.
+The timer interrupt handler can find the thread with minimum wake_time in O(1).
 
 ---- SYNCHRONIZATION ----
 
 >> A4: How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
 
-The interrupts are turned off in thread_sleep(), which is called during a call
-to timer_sleep().
+The interrupts are turned off in thread_sleep(),
+which is called during a call to timer_sleep().
 
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
 
-The system turns off the interrupts in thread_sleep(), which is called
-during a call to timer_sleep().
+The system turns off the interrupts in thread_sleep(),
+which is called during a call to timer_sleep().
 
 ---- RATIONALE ----
 
 >> A6: Why did you choose this design? In what ways is it superior to
 >> another design you considered?
 Follow the hints provided by Profession Wilson.
+
+Follow the hints provided by Professor Wilson.
 
 PRIORITY SCHEDULING
 ===================
@@ -114,6 +118,7 @@ PRIORITY SCHEDULING
 #define DONATION_LEVEL 8      /* Limit on depth of nested priority donation. */
 We impose a limit on depth of nested priority donation.
 
+
 struct thread
   {
     /* Owned by thread.c. */
@@ -122,7 +127,7 @@ struct thread
     char name[16];                     /* Name (for debugging purposes). */
     uint8_t *stack;                    /* Saved stack pointer. */
     int priority;                      /* Priority. */
-    int64_t wake_time;                 /* Ticks before wake sleeping thread. */
+    int64_t wake_time;                 /* Tick when sleeping thread should be waked. */
     struct list_elem allelem;          /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
@@ -139,19 +144,21 @@ struct thread
     int old_priorities[DONATION_LEVEL];
     struct thread * accepter;          /* Thread that received the donation. */
   };
-  Add a new member 'int old_priorities[DONATION_LEVEL]'
-  Add a new member 'struct thread * accepter', which is the thread that receive
-  a priority donation.
+Add a new member 'int old_priorities[DONATION_LEVEL]', which records the
+priority of this thread before it receive a priority donation.
+Add a new member 'struct thread * accepter', which is the thread that received
+priority donation from this thread.
 
 
 >> B2: Explain the data structure used to track priority donation.
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
 >> .png file.)
 
-Each thread has an integer array which saves previous priorities that was
-received before a new donation.
+Each thread has an integer array('old_priorities[DONATION_LEVEL]')
+which saves previous priorities that was received before a new
+donation.
 Each thread that donates it's priority saves the accepter of the priority in
-it's pointer to that thread.
+it's pointer to that thread('accepter').
 
 +-------------+            +-------------+           +-------------+
 |  Thread 1   | donate     |  Thread 2   | donate    |  Thread 3   |
@@ -262,3 +269,4 @@ No.
 >> Any other comments?
 
 No.
+
