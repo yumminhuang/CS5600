@@ -36,27 +36,16 @@ process_execute (const char *file_name)
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  /* tmp */
-  tmp = palloc_get_page (0);
-
   if (fn_copy == NULL)
     return TID_ERROR;
-
   strlcpy (fn_copy, file_name, PGSIZE);
-  strlcpy (tmp, file_name, PGSIZE);
 
-  char *prog, *p;
-  // Get the program name
-  prog = strtok_r(tmp, " ", &p);
+  file_name = strtok_r((char *)file_name, " ", &tmp);
 
-  /* Create a new thread to execute program. */
-  tid = thread_create (prog, PRI_DEFAULT, start_process, fn_copy);
-
-  // free tmp variable
-  palloc_free_page(tmp);
+  /* Create a new thread to execute FILE_NAME. */
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
-
   return tid;
 }
 
@@ -159,6 +148,8 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED)
 {
+  for(;;)
+    continue;
   return -1;
 }
 
