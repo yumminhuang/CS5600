@@ -7,6 +7,7 @@
 #include <string.h>
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
+#include "userprog/syscall.h"
 #include "userprog/tss.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
@@ -14,6 +15,7 @@
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -44,15 +46,17 @@ process_execute (const char *file_name)
   strlcpy (tmp, file_name, PGSIZE);
 
   char *prog, *p;
+  // Get the program name
   prog = strtok_r(tmp, " ", &p);
 
-  /* Create a new thread to execute FILE_NAME. */
+  /* Create a new thread to execute program. */
   tid = thread_create (prog, PRI_DEFAULT, start_process, fn_copy);
-  // free tmp variable
-  palloc_free_page(tmp)
 
+  // free tmp variable
+  palloc_free_page(tmp);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
+
   return tid;
 }
 
@@ -76,11 +80,11 @@ start_process (void *file_name_)
   char *argv[MAX_ARG_LEN];
   int argc = 0, len = 0, bytes = 16, i;
 
-  for(token = strtok_r (file_name, " ", &save_ptr);
-      token != NULL;
-      token = strtok_r (NULL, " ", &save_ptr)){
-    argv[++argc] = token;
-    bytes += sizeof(argv[argc - 1]) + 4
+  for(input = strtok_r (file_name, " ", &p);
+      input != NULL;
+      input = strtok_r (NULL, " ", &p)) {
+    argv[argc++] = input;
+    bytes += sizeof(argv[argc - 1]) + 4;
     if(bytes >= PGSIZE){
       argc--;
       break;
@@ -90,13 +94,48 @@ start_process (void *file_name_)
   success = load(argv[0], &if_.eip, &if_.esp);
 
   if(success){
-    // Not implement yet
+    thread_current()->esp = PHYS_BASE - PGSIZE;
+
+    // Push the arguments on the stack
+    for(i = argc - 1; i >=0; i--) {
+      len = strnlen(argv[i], MAX_ARG_LEN);
+      if_.esp -= (len + 1);
+      strlcpy(if_.esp, argv[i], MAX_ARG_LEN);
+      argv[i] = if_.esp;
+    }
+
+    // Push the stack pointer down
+    int diff;
+    if((diff = *(int*)if_.esp % 4) != 0)
+      if_.esp -= diff;
+
+    // Write 0 in the highest argv spot
+    if_.esp -= 4;
+    *(int *)if_.esp = (int) 0;
+
+    // Push the argument pointer
+    for(i = argc - 1; i >=0; i--) {
+      if_.esp -= sizeof(argv[i]);
+      *(char **)if_.esp = argv[i];
+    }
+
+    // Push the argv pointer
+    if_.esp -= 4;
+    *(char ***)if_.esp = if_.esp + 4;
+
+    // Push the argc
+    if_.esp -= sizeof(int);
+    *(int *)if_.esp = argc;
+
+    // Push the return address
+    if_.esp -= sizeof(void *);
+    *(int *)if_.esp = (int) 0;
   }
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success)
-    thread_exit ();
+    exit_thread(-1);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
