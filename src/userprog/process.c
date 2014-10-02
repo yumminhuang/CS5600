@@ -66,65 +66,54 @@ start_process (void *file_name_)
 
   /* Parse the input. */
   char *input, *p;
-  char *argv[MAX_ARG_LEN];
-  int argc = 0, len = 0, bytes = 16, i;
+  void *start;
+  int *argv_off;
+  int argc = 0, i;
+  size_t len;
+
+  argv_off = palloc_get_page(0);
+  len = strlen(file_name);
+  argv_off[0] = 0;
 
   for(input = strtok_r (file_name, " ", &p);
       input != NULL;
       input = strtok_r (NULL, " ", &p)) {
-    argv[argc++] = input;
-    bytes += sizeof(argv[argc - 1]) + 4;
-    if(bytes >= PGSIZE){
-      argc--;
-      break;
+    if(argc >= MAX_ARG_LEN) {
+      palloc_free_page(file_name);
+      palloc_free_page(argv_off);
+      thread_exit();
     }
+    argv_off[++argc] = p - file_name;
   }
 
-  success = load(argv[0], &if_.eip, &if_.esp);
+  success = load (file_name, &if_.eip, &if_.esp);
 
-  if(success){
-    thread_current()->esp = PHYS_BASE - PGSIZE;
-
-    // Push the arguments on the stack
-    for(i = argc - 1; i >=0; i--) {
-      len = strnlen(argv[i], MAX_ARG_LEN);
-      if_.esp -= (len + 1);
-      strlcpy(if_.esp, argv[i], MAX_ARG_LEN);
-      argv[i] = if_.esp;
-    }
-
-    // Push the stack pointer down
-    int diff;
-    if((diff = *(int*)if_.esp % 4) != 0)
-      if_.esp -= diff;
-
-    // Write 0 in the highest argv spot
-    if_.esp -= 4;
-    *(int *)if_.esp = (int) 0;
-
-    // Push the argument pointer
-    for(i = argc - 1; i >=0; i--) {
-      if_.esp -= sizeof(argv[i]);
-      *(char **)if_.esp = argv[i];
-    }
-
-    // Push the argv pointer
-    if_.esp -= 4;
-    *(char ***)if_.esp = if_.esp + 4;
-
-    // Push the argc
-    if_.esp -= sizeof(int);
-    *(int *)if_.esp = argc;
-
-    // Push the return address
-    if_.esp -= sizeof(void *);
-    *(int *)if_.esp = (int) 0;
+  /* Set up stack*/
+  if_.esp -= len + 1;
+  start = if_.esp;
+  memcpy (if_.esp, file_name, len + 1);
+  if_.esp -= 4 - (len + 1) % 4; // alignment
+  if_.esp -= 4;
+  *(int *)(if_.esp) = 0; // argv[argc] == 0
+  
+  /* Pushing argv[x] */
+  for(i = argc - 1; i >= 0; --i) {
+      if_.esp -= 4;
+      *(void **)(if_.esp) = start + argv_off[i];
   }
-
+  
+  if_.esp -= 4;
+  *(char **)(if_.esp) = (if_.esp + 4); // argv 
+  if_.esp -= 4;
+  *(int *)(if_.esp) = argc;
+  if_.esp -= 4;
+  *(int *)(if_.esp) = 0; // return address
+  palloc_free_page (argv_off);
+  
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success)
-    exit_thread(-1);
+  if (!success) 
+    thread_exit ();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -146,11 +135,20 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED)
+process_wait (tid_t child_tid)
 {
-  for(;;)
-    continue;
-  return -1;
+  struct thread *t;
+  int status;
+
+  t = get_thread_by_tid(child_tid);
+  if(!t)
+    PANIC("Wrong child_tid");
+
+  sema_down(&t->wait);
+  status = t->exit_status;
+  thread_unblock(t);
+
+  return status;
 }
 
 /* Free the current process's resources. */
@@ -159,6 +157,14 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* Print termination message. */
+  printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+
+  sema_up(&cur->wait);
+  intr_disable();
+  thread_block();
+  intr_enable();
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */

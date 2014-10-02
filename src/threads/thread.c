@@ -175,6 +175,7 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
+  enum intr_level old_level;
 
   ASSERT (function != NULL);
 
@@ -186,6 +187,9 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
+  // repare thread for first run by initializing its stack.
+  old_level = intr_disable();
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -202,8 +206,14 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  intr_set_level (old_level);
   /* Add to run queue. */
   thread_unblock (t);
+
+#ifdef USERPROG
+  // Initialize wait semaphore
+  sema_init(&t->wait, 0);
+#endif
 
   return tid;
 }
@@ -613,6 +623,21 @@ allocate_tid (void)
   lock_release (&tid_lock);
 
   return tid;
+}
+
+/* Return thread with the given tid. */
+struct thread * 
+get_thread_by_tid(tid_t tid){
+  struct list_elem *e;
+  struct thread *t = NULL;
+
+  for(e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
+    t = list_entry(e, struct thread, allelem);
+    ASSERT(is_thread(t));
+
+    if(t->tid == tid)
+      return t;
+  }
 }
 
 /* Offset of `stack' member within `struct thread'.
