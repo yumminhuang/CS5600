@@ -100,7 +100,6 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;         /* Page directory. */
-    void * esp;                /* The end of stack pointer. */
     struct semaphore wait;     /* Semaphore for process_wait. */
     int exit_status;           /* Exit status. */
 #endif

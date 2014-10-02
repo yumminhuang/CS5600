@@ -188,7 +188,7 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
-  // repare thread for first run by initializing its stack.
+  // Prepare thread for first run by initializing its stack.
   old_level = intr_disable();
 
   /* Stack frame for kernel_thread(). */
@@ -587,7 +587,9 @@ schedule (void)
   int64_t cur_ticks = timer_ticks();
 
   //Check sleeping list
-  for(e = list_begin (&sleeping_list); e != list_end (&sleeping_list); e = list_next (e)) {
+  for(e = list_begin(&sleeping_list);
+      e != list_end(&sleeping_list);
+      e = list_next(e)) {
     struct thread *t = list_entry (e, struct thread, elem);
     if (t->wake_time <= timer_ticks()) {
       e = (list_remove(&t->elem))->prev;
@@ -626,7 +628,7 @@ allocate_tid (void)
 }
 
 /* Return thread with the given tid. */
-struct thread * 
+struct thread *
 get_thread_by_tid(tid_t tid){
   struct list_elem *e;
   struct thread *t = NULL;

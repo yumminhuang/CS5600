@@ -83,6 +83,9 @@ start_process (void *file_name_)
       palloc_free_page(argv_off);
       thread_exit();
     }
+    // Handle spaces
+    while (*p == ' ')
+      p++;
     argv_off[++argc] = p - file_name;
   }
 
@@ -95,24 +98,25 @@ start_process (void *file_name_)
   if_.esp -= 4 - (len + 1) % 4; // alignment
   if_.esp -= 4;
   *(int *)(if_.esp) = 0; // argv[argc] == 0
-  
+
   /* Pushing argv[x] */
   for(i = argc - 1; i >= 0; --i) {
       if_.esp -= 4;
       *(void **)(if_.esp) = start + argv_off[i];
   }
-  
+
   if_.esp -= 4;
-  *(char **)(if_.esp) = (if_.esp + 4); // argv 
+  *(char **)(if_.esp) = (if_.esp + 4); // argv
   if_.esp -= 4;
   *(int *)(if_.esp) = argc;
   if_.esp -= 4;
   *(int *)(if_.esp) = 0; // return address
+
   palloc_free_page (argv_off);
-  
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
+  if (!success)
     thread_exit ();
 
   /* Start the user process by simulating a return from an
