@@ -157,7 +157,11 @@ create_handler (const char *file, unsigned initial_size)
 static int
 remove_handler (const char *file)
 {
-  return -1;
+  if (!file)
+	return 0;
+  if (!is_user_vaddr (file))
+	  exit_handler (-1);
+  return filesys_remove (file);
 }
 
 /* Opens the file called file. */
