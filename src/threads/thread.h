@@ -19,7 +19,7 @@ enum thread_status
 /* File and its file descriptor opened by a process */  
 struct file_fd
   {
-    struct file * f;
+    struct file * file;
 	int fd;
 	
 	struct list_elem elem;

@@ -106,7 +106,20 @@ halt_handler (void)
 static int
 exit_handler (int status)
 {
-  thread_current()->exit_status = status;
+  struct thread *t = thread_current ();
+  struct list_elem *e;
+
+  t->exit_status = status;
+  
+  /* close all files opened by the process */
+  while (!list_empty (&t->opened_files))
+  {
+    e = list_begin (&t->opened_files);
+	struct file_fd *f = list_entry (e, struct file_fd, elem);
+	
+	close_handler (f->fd);
+  }
+  
   thread_exit();
   return -1;
 }
@@ -164,7 +177,7 @@ open_handler (const char *file)
     return -1;
   
   file_handle = (struct file_fd *) malloc (sizeof (struct file_fd));
-  file_handle->f = ret_file;
+  file_handle->file = ret_file;
   file_handle->fd = t->next_fd;
   
   t->next_fd++;
@@ -254,7 +267,15 @@ write_handler (int fd, const void *buffer, unsigned size)
 static int
 seek_handler (int fd, unsigned position)
 {
-  return -1;
+  struct file * f;
+  
+  f = file_from_fd (thread_current (), fd);
+  if (f == NULL)
+    return -1;
+  
+  file_seek (f, (off_t) position);
+  
+  return 0;
 }
 
 /* Returns the position of the next byte to be read or written in
@@ -262,7 +283,13 @@ seek_handler (int fd, unsigned position)
 static int
 tell_handler (int fd)
 {
-  return -1;
+  struct file * f;
+  
+  f = file_from_fd (thread_current (), fd);
+  if (f == NULL)
+    return -1;  
+  
+  return (int) file_tell (f);
 }
 
 /* Closes file descriptor fd. Exiting or terminating a process
@@ -271,7 +298,29 @@ tell_handler (int fd)
 static int
 close_handler (int fd)
 {
-  return -1;
+  struct list_elem *e;
+  struct thread *t;
+  int ret = -1;
+  
+  t = thread_current ();
+
+  for (e = list_begin (&t->opened_files); 
+       e != list_end (&t->opened_files);
+       e = list_next (e))
+    {
+      struct file_fd *f = list_entry (e, struct file_fd, elem);	  
+      if (f->fd == fd)
+	  {
+	    file_close (f->file);
+	    list_remove (&f->elem);
+		free(f);
+		
+		ret = 0;
+		break;
+	  }
+    }
+	
+	return ret;
 }
 
 /* Helper Functions */
@@ -293,7 +342,7 @@ file_from_fd (struct thread *t, int fd)
       struct file_fd *f = list_entry (e, struct file_fd, elem);	  
       if (f->fd == fd)
 	  {
-	    ret = f->f;
+	    ret = f->file;
 		break;
 	  }
     }
