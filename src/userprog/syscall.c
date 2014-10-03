@@ -121,6 +121,9 @@ wait_handler(pid_t pid)
 static int
 create_handler(const char *file, unsigned initial_size)
 {
+  if (file == NULL)
+    exit_handler (-1);
+	
   return filesys_create (file, initial_size);
 }
 
@@ -138,6 +141,9 @@ open_handler(const char *file)
   struct file * ret_file;
   struct file_fd * file_handle;
   struct thread * t = thread_current ();
+  
+  if (file == NULL)
+    exit_handler (-1);
   
   ret_file = filesys_open (file);
   
