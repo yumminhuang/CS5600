@@ -5,10 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "userprog/gdt.h"
-#include "userprog/pagedir.h"
-#include "userprog/syscall.h"
-#include "userprog/tss.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -19,6 +15,10 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/gdt.h"
+#include "userprog/pagedir.h"
+#include "userprog/syscall.h"
+#include "userprog/tss.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -30,8 +30,9 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name)
 {
-  char *fn_copy, *tmp;
+  char *fn_copy, *tmp, *prog;
   tid_t tid;
+  struct thread *t;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -40,12 +41,29 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  file_name = strtok_r((char *)file_name, " ", &tmp);
-
+  prog = malloc(strlen(file_name) + 1);
+  if(!prog)
+	goto done;
+  memcpy(prog, file_name, strlen(file_name) + 1);
+  file_name = strtok_r((char *)prog, " ", &tmp);
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (prog, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy);
+    goto done;
+
+  t = get_thread_by_tid(tid);
+  sema_down(&t->wait);
+  if(t->exit_status == -1)
+	tid = TID_ERROR;
+  while(t->status == THREAD_BLOCKED)
+	thread_unblock(t);
+  if(t->exit_status == -1)
+	process_wait(t->tid);
+
+done:
+  free(prog);
+  if (tid == TID_ERROR)
+      palloc_free_page (fn_copy);
   return tid;
 }
 
@@ -57,6 +75,7 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+  struct thread *t;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -71,6 +90,7 @@ start_process (void *file_name_)
   int argc = 0, i;
   size_t len;
 
+  t = thread_current();
   argv_off = palloc_get_page(0);
   len = strlen(file_name);
   argv_off[0] = 0;
@@ -91,33 +111,45 @@ start_process (void *file_name_)
 
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* Set up stack*/
-  if_.esp -= len + 1;
-  start = if_.esp;
-  memcpy (if_.esp, file_name, len + 1);
-  if_.esp -= 4 - (len + 1) % 4; // alignment
-  if_.esp -= 4;
-  *(int *)(if_.esp) = 0; // argv[argc] == 0
+  if(success){
+	t->image = filesys_open(file_name);
+	file_deny_write(t->image);
+	/* Set up stack*/
+	if_.esp -= len + 1;
+	start = if_.esp;
+	memcpy (if_.esp, file_name, len + 1);
+	if_.esp -= 4 - (len + 1) % 4; // alignment
+	if_.esp -= 4;
+	*(int *)(if_.esp) = 0; // argv[argc] == 0
 
-  /* Pushing argv[x] */
-  for(i = argc - 1; i >= 0; --i) {
-      if_.esp -= 4;
-      *(void **)(if_.esp) = start + argv_off[i];
+	/* Pushing argv[x] */
+	for(i = argc - 1; i >= 0; --i) {
+		if_.esp -= 4;
+		*(void **)(if_.esp) = start + argv_off[i];
+	}
+
+	if_.esp -= 4;
+	*(char **)(if_.esp) = (if_.esp + 4); // argv
+	if_.esp -= 4;
+	*(int *)(if_.esp) = argc;
+	if_.esp -= 4;
+	*(int *)(if_.esp) = 0; // return address
+
+	sema_up(&t->wait);
+	intr_disable ();
+	thread_block ();
+	intr_enable ();
+  } else {
+	t->exit_status = -1;
+	sema_up (&t->wait);
+	intr_disable ();
+	thread_block ();
+	intr_enable ();
+	thread_exit ();
   }
 
-  if_.esp -= 4;
-  *(char **)(if_.esp) = (if_.esp + 4); // argv
-  if_.esp -= 4;
-  *(int *)(if_.esp) = argc;
-  if_.esp -= 4;
-  *(int *)(if_.esp) = 0; // return address
-
   palloc_free_page (argv_off);
-
-  /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success)
-    thread_exit ();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -145,12 +177,17 @@ process_wait (tid_t child_tid)
   int status;
 
   t = get_thread_by_tid(child_tid);
-  if(!t)
-    PANIC("Wrong child_tid");
+  if (!t || t->status == THREAD_DYING || t->parent == thread_current())
+  	return -1;
 
-  sema_down(&t->wait);
+  t->parent = thread_current();
+  intr_disable ();
+  thread_block ();
+  intr_enable ();
   status = t->exit_status;
-  thread_unblock(t);
+  printf ("%s: exit(%d)\n", t->name, t->exit_status);
+  while (t->status == THREAD_BLOCKED)
+    thread_unblock (t);
 
   return status;
 }
@@ -163,9 +200,12 @@ process_exit (void)
   uint32_t *pd;
 
   /* Print termination message. */
-  printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+  // printf("%s: exit(%d)\n", cur->name, cur->exit_status);
 
-  sema_up(&cur->wait);
+  while (cur->parent && cur->parent->status == THREAD_BLOCKED)
+	thread_unblock (cur->parent);
+  file_close (cur->image);
+  cur->image = NULL;
   intr_disable();
   thread_block();
   intr_enable();

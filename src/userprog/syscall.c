@@ -1,9 +1,16 @@
 #include "userprog/syscall.h"
+#include <list.h>
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "devices/input.h"
 #include "devices/shutdown.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
+#include "threads/palloc.h"
+#include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
@@ -17,7 +24,6 @@
 /* Function declarations */
 static void syscall_handler (struct intr_frame *);
 static int halt_handler (void);
-static int exit_handler (int status);
 static int exec_handler (const char *cmd_line);
 static int wait_handler (pid_t pid);
 static int create_handler (const char *file, unsigned initial_size);

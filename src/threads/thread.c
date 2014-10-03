@@ -213,6 +213,9 @@ thread_create (const char *name, int priority,
 #ifdef USERPROG
   // Initialize wait semaphore
   sema_init(&t->wait, 0);
+  t->exit_status = 0;
+  list_init(&t->files);
+  t->parent = NULL;
 #endif
 
   return tid;
@@ -632,7 +635,7 @@ allocate_tid (void)
   return tid;
 }
 
-/* Return thread with the given tid. */
+/* Return the thread with the given tid. */
 struct thread *
 get_thread_by_tid(tid_t tid){
   struct list_elem *e;
@@ -645,6 +648,7 @@ get_thread_by_tid(tid_t tid){
     if(t->tid == tid)
       return t;
   }
+  return NULL;
 }
 
 /* Offset of `stack' member within `struct thread'.

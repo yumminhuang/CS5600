@@ -109,7 +109,10 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;         /* Page directory. */
-    struct semaphore wait;     /* Semaphore for process_wait. */
+    struct thread *parent;    /* Parent process. */
+    struct list files;        /* List of opened files. */
+    struct file *image;       /* The image file on the disk. */
+    struct semaphore wait;    /* Semaphore for process_wait. */
     int exit_status;           /* Exit status. */
 #endif
 
