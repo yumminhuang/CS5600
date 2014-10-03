@@ -15,6 +15,15 @@ enum thread_status
     THREAD_SLEEPING     /* Sleeping thread. */
   };
 
+/* File and its file descriptor opened by a process */  
+struct file_fd
+  {
+    struct file * f;
+	int fd;
+	
+	struct list_elem elem;
+  };
+
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
@@ -100,6 +109,10 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
+    /* Shared between thread.c and userprog/syscall.c. */
+	struct list opened_files;           /* files opened by the process */
+	int next_fd;                        /* file descriptor for next opened file */	
+	
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };

@@ -483,6 +483,11 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   // thread is not in sleeping_list
   t->wake_time = 0;
+  
+  list_init (&t->opened_files);
+  /* initialize next_fd to 2 as 0 and 1 are reserved for console */
+  t->next_fd = 2;
+  
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();

@@ -3,6 +3,7 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 
@@ -53,11 +54,27 @@ create (const char *file, unsigned initial_size)
 // }
 
 /* Opens the file called file. */
-// int 
-// open (const char *file)
-// {
-//   struct file * filesys_open (const char *name)
-// }
+int 
+open (const char *file)
+{
+  struct file * ret_file;
+  struct file_fd * file_handle;
+  struct thread * t = thread_current ();
+  
+  ret_file = filesys_open (file);
+  
+  if (ret_file == NULL)
+    return -1;
+  
+  file_handle = (struct file_fd *) malloc (sizeof (struct file_fd));
+  file_handle->f = ret_file;
+  file_handle->fd = t->next_fd;
+  
+  t->next_fd++;
+  list_push_back (&t->opened_files, &file_handle->elem);
+  
+  return file_handle->fd;
+}
 
 /* Returns the size, in bytes, of the file open as fd. */
 // int 
