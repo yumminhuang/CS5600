@@ -33,6 +33,7 @@ static int close_handler (int fd);
 static struct file * file_from_fd (struct thread * t, int fd);
 static int read_from_stdin (void *buffer, unsigned size);
 static int read_from_file (struct thread *t, int fd, void *buffer, unsigned size);
+static int write_to_file (struct thread *t, int fd, const void *buffer, unsigned size);
 
 typedef int (*handler) (uint32_t, uint32_t, uint32_t);
 static handler syscall_table[128];
@@ -60,7 +61,7 @@ syscall_init (void)
   syscall_table[SYS_CLOSE] = (handler)close_handler;
   
   /* Initialize lock */
-  //lock_init (&lock1);
+  lock_init (&lock1);
 }
 
 static void
@@ -195,26 +196,24 @@ read_handler (int fd, void *buffer, unsigned size)
 {
   int ret = -1;
   
+  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))  /* if buffer is a bad pointer */
+    exit_handler (-1);
+  
   switch (fd)
   {
     case 1:  /* read from STDOUT should return -1 */
 	  break;
 	  
 	case 0:  /* read from keyboard */
-	  //lock_acquire (&lock1);
+	  lock_acquire (&lock1);
 	  ret = read_from_stdin (buffer, size);
-	  //lock_release (&lock1);
+	  lock_release (&lock1);
 	  break;
 	  
 	default: /* read from file */
-	  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))  /* if buffer is a bad pointer */
-	    exit_handler (-1);
-	  else
-	  {
-	    //lock_acquire (&lock1);
-	    ret = read_from_file (thread_current (), fd, buffer, size);
-		//lock_release (&lock1);
-      }
+	  lock_acquire (&lock1);
+	  ret = read_from_file (thread_current (), fd, buffer, size);
+      lock_release (&lock1);
   }
   
   return ret;
@@ -226,9 +225,27 @@ read_handler (int fd, void *buffer, unsigned size)
 static int
 write_handler (int fd, const void *buffer, unsigned size)
 {
-  if (fd == 1)
-    putbuf(buffer, size);
-  return size;
+  int ret = -1;
+  
+  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))  /* if buffer is a bad pointer */
+	exit_handler (-1);
+  
+  switch (fd)
+  {
+    case 0:  /* write to STDIN should return -1 */
+	  break;
+	case 1:  /* write to console */
+	  putbuf(buffer, size);
+	  ret = size;
+	  break;
+	  
+	default: /* write to file */
+	  lock_acquire (&lock1);
+	  ret = write_to_file (thread_current (), fd, buffer, size);
+      lock_release (&lock1);	
+  }
+
+  return ret;
 }
 
 /* Changes the next byte to be read or written in open file fd to
@@ -305,4 +322,16 @@ read_from_file (struct thread *t, int fd, void *buffer, unsigned size)
     return -1;
   
   return file_read (f, buffer, (off_t) size);
+}
+
+static int
+write_to_file (struct thread *t, int fd, const void *buffer, unsigned size)
+{
+  struct file * f;
+  
+  f = file_from_fd (t, fd);
+  if (f == NULL)
+    return -1;
+  
+  return file_write (f, buffer, (off_t) size);
 }
