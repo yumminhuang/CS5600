@@ -214,7 +214,7 @@ thread_create (const char *name, int priority,
   // Initialize wait semaphore
   sema_init(&t->wait, 0);
   t->exit_status = 0;
-  list_init(&t->files);
+  list_init(&t->opened_files);
   t->parent = NULL;
 #endif
 

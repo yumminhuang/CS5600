@@ -107,18 +107,15 @@ struct thread
     struct list_elem elem;     /* List element. */
 
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
+    /* Shared between userprog/process.c and userprog/syscall.c. */
     uint32_t *pagedir;         /* Page directory. */
-    struct thread *parent;    /* Parent process. */
-    struct list files;        /* List of opened files. */
-    struct file *image;       /* The image file on the disk. */
-    struct semaphore wait;    /* Semaphore for process_wait. */
+    struct thread *parent;     /* Parent process. */
+    struct list opened_files;  /* Files opened by the process */
+	int next_fd;               /* File descriptor for next file */	
+    struct file *image;        /* The image file on the disk. */
+    struct semaphore wait;     /* Semaphore for process_wait. */
     int exit_status;           /* Exit status. */
 #endif
-
-    /* Shared between thread.c and userprog/syscall.c. */
-	struct list opened_files;           /* files opened by the process */
-	int next_fd;                        /* file descriptor for next opened file */	
 	
     /* Owned by thread.c. */
     unsigned magic;            /* Detects stack overflow. */

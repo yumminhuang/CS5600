@@ -109,7 +109,7 @@ halt_handler (void)
 
 /* Terminates the currnet user program, returning status to
  * the kernal. */
-static int
+int
 exit_handler (int status)
 {
   struct thread *t = thread_current ();
