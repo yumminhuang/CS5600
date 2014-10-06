@@ -18,7 +18,6 @@
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "userprog/process.h"
-#include "devices/input.h"
 
 
 /* Function declarations */
@@ -38,8 +37,10 @@ static int close_handler (int fd);
 
 static struct file * file_from_fd (struct thread * t, int fd);
 static int read_from_stdin (void *buffer, unsigned size);
-static int read_from_file (struct thread *t, int fd, void *buffer, unsigned size);
-static int write_to_file (struct thread *t, int fd, const void *buffer, unsigned size);
+static int read_from_file (struct thread *t, int fd,
+                           void *buffer, unsigned size);
+static int write_to_file (struct thread *t, int fd,
+                          const void *buffer, unsigned size);
 
 typedef int (*handler) (uint32_t, uint32_t, uint32_t);
 static handler syscall_table[128];
@@ -65,7 +66,7 @@ syscall_init (void)
   syscall_table[SYS_SEEK] = (handler)seek_handler;
   syscall_table[SYS_TELL] = (handler)tell_handler;
   syscall_table[SYS_CLOSE] = (handler)close_handler;
-  
+
   /* Initialize lock */
   lock_init (&lock1);
 }
@@ -116,16 +117,17 @@ exit_handler (int status)
   struct list_elem *e;
 
   t->exit_status = status;
-  
+
   /* close all files opened by the process */
   while (!list_empty (&t->opened_files))
   {
     e = list_begin (&t->opened_files);
-	struct file_fd *f = list_entry (e, struct file_fd, elem);
-	
-	close_handler (f->fd);
+
+    struct file_fd *f = list_entry (e, struct file_fd, elem);
+
+    close_handler (f->fd);
   }
-  
+
   thread_exit();
   return -1;
 }
@@ -155,7 +157,7 @@ create_handler (const char *file, unsigned initial_size)
 {
   if (file == NULL)
     exit_handler (-1);
-	
+
   return filesys_create (file, initial_size);
 }
 
@@ -164,9 +166,9 @@ static int
 remove_handler (const char *file)
 {
   if (!file)
-	return 0;
+  return 0;
   if (!is_user_vaddr (file))
-	  exit_handler (-1);
+    exit_handler (-1);
   return filesys_remove (file);
 }
 
@@ -177,22 +179,22 @@ open_handler (const char *file)
   struct file * ret_file;
   struct file_fd * file_handle;
   struct thread * t = thread_current ();
-  
+
   if (file == NULL)
     exit_handler (-1);
-  
+
   ret_file = filesys_open (file);
-  
+
   if (ret_file == NULL)
     return -1;
-  
+
   file_handle = (struct file_fd *) malloc (sizeof (struct file_fd));
   file_handle->file = ret_file;
   file_handle->fd = t->next_fd;
-  
+
   t->next_fd++;
   list_push_back (&t->opened_files, &file_handle->elem);
-  
+
   return file_handle->fd;
 }
 
@@ -201,12 +203,12 @@ static int
 filesize_handler (int fd)
 {
   struct thread *t = thread_current ();
-  
+
   struct file *file = file_from_fd (t, fd);
-  
+
   if (file == NULL)
     return -1;
-  
+
   return file_length (file);
 }
 
@@ -218,27 +220,27 @@ static int
 read_handler (int fd, void *buffer, unsigned size)
 {
   int ret = -1;
-  
+
   if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))  /* if buffer is a bad pointer */
     exit_handler (-1);
-  
+
   switch (fd)
   {
     case 1:  /* read from STDOUT should return -1 */
-	  break;
-	  
-	case 0:  /* read from keyboard */
-	  lock_acquire (&lock1);
-	  ret = read_from_stdin (buffer, size);
-	  lock_release (&lock1);
-	  break;
-	  
-	default: /* read from file */
-	  lock_acquire (&lock1);
-	  ret = read_from_file (thread_current (), fd, buffer, size);
-      lock_release (&lock1);
+    break;
+
+  case 0:  /* read from keyboard */
+    lock_acquire (&lock1);
+    ret = read_from_stdin (buffer, size);
+    lock_release (&lock1);
+    break;
+
+  default: /* read from file */
+    lock_acquire (&lock1);
+    ret = read_from_file (thread_current (), fd, buffer, size);
+    lock_release (&lock1);
   }
-  
+
   return ret;
 }
 
@@ -249,23 +251,24 @@ static int
 write_handler (int fd, const void *buffer, unsigned size)
 {
   int ret = -1;
-  
-  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))  /* if buffer is a bad pointer */
-	exit_handler (-1);
-  
+
+  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))
+    /* if buffer is a bad pointer */
+    exit_handler (-1);
+
   switch (fd)
   {
     case 0:  /* write to STDIN should return -1 */
-	  break;
-	case 1:  /* write to console */
-	  putbuf(buffer, size);
-	  ret = size;
-	  break;
-	  
-	default: /* write to file */
-	  lock_acquire (&lock1);
-	  ret = write_to_file (thread_current (), fd, buffer, size);
-      lock_release (&lock1);	
+      break;
+    case 1:  /* write to console */
+      putbuf(buffer, size);
+      ret = size;
+      break;
+
+    default: /* write to file */
+      lock_acquire (&lock1);
+      ret = write_to_file (thread_current (), fd, buffer, size);
+      lock_release (&lock1);
   }
 
   return ret;
@@ -278,13 +281,13 @@ static int
 seek_handler (int fd, unsigned position)
 {
   struct file * f;
-  
+
   f = file_from_fd (thread_current (), fd);
   if (f == NULL)
     return -1;
-  
+
   file_seek (f, (off_t) position);
-  
+
   return 0;
 }
 
@@ -294,11 +297,11 @@ static int
 tell_handler (int fd)
 {
   struct file * f;
-  
+
   f = file_from_fd (thread_current (), fd);
   if (f == NULL)
-    return -1;  
-  
+    return -1;
+
   return (int) file_tell (f);
 }
 
@@ -311,33 +314,33 @@ close_handler (int fd)
   struct list_elem *e;
   struct thread *t;
   int ret = -1;
-  
+
   t = thread_current ();
 
-  for (e = list_begin (&t->opened_files); 
+  for (e = list_begin (&t->opened_files);
        e != list_end (&t->opened_files);
        e = list_next (e))
     {
-      struct file_fd *f = list_entry (e, struct file_fd, elem);	  
+      struct file_fd *f = list_entry (e, struct file_fd, elem);
       if (f->fd == fd)
-	  {
-	    file_close (f->file);
-	    list_remove (&f->elem);
-		free(f);
-		
-		ret = 0;
-		break;
-	  }
+      {
+        file_close (f->file);
+        list_remove (&f->elem);
+        free(f);
+
+        ret = 0;
+        break;
+      }
     }
-	
-	return ret;
+
+  return ret;
 }
 
 /* Helper Functions */
 
 /* GIVEN a thread and a file descriptor
- * RETURNS a struct file * that corresponds to the 
- * file descriptor of the thread 
+ * RETURNS a struct file * that corresponds to the
+ * file descriptor of the thread
  * or NULL if cannot find the file */
 static struct file *
 file_from_fd (struct thread *t, int fd)
@@ -345,18 +348,18 @@ file_from_fd (struct thread *t, int fd)
   struct list_elem *e;
   struct file *ret = NULL;
 
-  for (e = list_begin (&t->opened_files); 
+  for (e = list_begin (&t->opened_files);
        e != list_end (&t->opened_files);
        e = list_next (e))
     {
-      struct file_fd *f = list_entry (e, struct file_fd, elem);	  
+      struct file_fd *f = list_entry (e, struct file_fd, elem);
       if (f->fd == fd)
-	  {
-	    ret = f->file;
-		break;
-	  }
+      {
+        ret = f->file;
+        break;
+      }
     }
-  
+
   return ret;
 }
 
@@ -364,10 +367,10 @@ static int
 read_from_stdin (void *buffer, unsigned size)
 {
   int i;
-  
+
   for (i = 0; i < (int) size; i++)
     * (uint8_t *) (buffer + i) = input_getc ();
-	
+
   return size;
 }
 
@@ -375,11 +378,11 @@ static int
 read_from_file (struct thread *t, int fd, void *buffer, unsigned size)
 {
   struct file * f;
-  
+
   f = file_from_fd (t, fd);
   if (f == NULL)
     return -1;
-  
+
   return file_read (f, buffer, (off_t) size);
 }
 
@@ -387,11 +390,10 @@ static int
 write_to_file (struct thread *t, int fd, const void *buffer, unsigned size)
 {
   struct file * f;
-  
+
   f = file_from_fd (t, fd);
   if (f == NULL)
     return -1;
-  
+
   return file_write (f, buffer, (off_t) size);
 }
-
