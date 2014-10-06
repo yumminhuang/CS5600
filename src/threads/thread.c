@@ -214,7 +214,7 @@ thread_create (const char *name, int priority,
   // Initialize wait semaphore
   sema_init(&t->wait, 0);
   t->exit_status = 0;
-  list_init(&t->files);
+  list_init(&t->opened_files);
   t->parent = NULL;
 #endif
 
@@ -496,6 +496,11 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   // thread is not in sleeping_list
   t->wake_time = 0;
+  
+  list_init (&t->opened_files);
+  /* initialize next_fd to 2 as 0 and 1 are reserved for console */
+  t->next_fd = 2;
+  
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -649,3 +654,4 @@ get_thread_by_tid(tid_t tid){
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+

@@ -16,6 +16,15 @@ enum thread_status
     THREAD_SLEEPING     /* Sleeping thread. */
   };
 
+/* File and its file descriptor opened by a process */  
+struct file_fd
+  {
+    struct file * file;
+	int fd;
+	
+	struct list_elem elem;
+  };
+
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
@@ -98,15 +107,16 @@ struct thread
     struct list_elem elem;     /* List element. */
 
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
+    /* Shared between userprog/process.c and userprog/syscall.c. */
     uint32_t *pagedir;         /* Page directory. */
-    struct thread *parent;    /* Parent process. */
-    struct list files;        /* List of opened files. */
-    struct file *image;       /* The image file on the disk. */
-    struct semaphore wait;    /* Semaphore for process_wait. */
+    struct thread *parent;     /* Parent process. */
+    struct list opened_files;  /* Files opened by the process */
+	int next_fd;               /* File descriptor for next file */	
+    struct file *image;        /* The image file on the disk. */
+    struct semaphore wait;     /* Semaphore for process_wait. */
     int exit_status;           /* Exit status. */
 #endif
-
+	
     /* Owned by thread.c. */
     unsigned magic;            /* Detects stack overflow. */
   };
@@ -151,3 +161,4 @@ int thread_get_load_avg (void);
 struct thread* get_thread_by_tid(tid_t);
 
 #endif /* threads/thread.h */
+
