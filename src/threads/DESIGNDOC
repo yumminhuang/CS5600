@@ -102,8 +102,6 @@ which is called during a call to timer_sleep().
 
 >> A6: Why did you choose this design? In what ways is it superior to
 >> another design you considered?
-Follow the hints provided by Profession Wilson.
-
 Follow the hints provided by Professor Wilson.
 
 PRIORITY SCHEDULING

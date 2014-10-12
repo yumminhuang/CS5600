@@ -175,6 +175,7 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
+  enum intr_level old_level;
 
   ASSERT (function != NULL);
 
@@ -186,6 +187,9 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
+  // Prepare thread for first run by initializing its stack.
+  old_level = intr_disable();
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -202,8 +206,17 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  intr_set_level (old_level);
   /* Add to run queue. */
   thread_unblock (t);
+
+#ifdef USERPROG
+  // Initialize wait semaphore
+  sema_init(&t->wait, 0);
+  t->exit_status = 0;
+  list_init(&t->opened_files);
+  t->parent = NULL;
+#endif
 
   return tid;
 }
@@ -483,6 +496,11 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   // thread is not in sleeping_list
   t->wake_time = 0;
+
+  list_init (&t->opened_files);
+  /* initialize next_fd to 2 as 0 and 1 are reserved for console */
+  t->next_fd = 2;
+
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -577,7 +595,9 @@ schedule (void)
   int64_t cur_ticks = timer_ticks();
 
   //Check sleeping list
-  for(e = list_begin (&sleeping_list); e != list_end (&sleeping_list); e = list_next (e)) {
+  for(e = list_begin(&sleeping_list);
+      e != list_end(&sleeping_list);
+      e = list_next(e)) {
     struct thread *t = list_entry (e, struct thread, elem);
     if (t->wake_time <= timer_ticks()) {
       e = (list_remove(&t->elem))->prev;
@@ -613,6 +633,22 @@ allocate_tid (void)
   lock_release (&tid_lock);
 
   return tid;
+}
+
+/* Return the thread with the given tid. */
+struct thread *
+get_thread_by_tid(tid_t tid){
+  struct list_elem *e;
+  struct thread *t = NULL;
+
+  for(e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
+    t = list_entry(e, struct thread, allelem);
+    ASSERT(is_thread(t));
+
+    if(t->tid == tid)
+      return t;
+  }
+  return NULL;
 }
 
 /* Offset of `stack' member within `struct thread'.
