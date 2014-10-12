@@ -43,7 +43,7 @@ process_execute (const char *file_name)
 
   prog = malloc(strlen(file_name) + 1);
   if(!prog)
-	goto done;
+    goto done;
   memcpy(prog, file_name, strlen(file_name) + 1);
   file_name = strtok_r((char *)prog, " ", &tmp);
   /* Create a new thread to execute FILE_NAME. */
@@ -53,14 +53,17 @@ process_execute (const char *file_name)
 
   t = get_thread_by_tid(tid);
   sema_down(&t->wait);
-  if(t->exit_status == -1)
-	tid = TID_ERROR;
-  while(t->status == THREAD_BLOCKED)
-	thread_unblock(t);
-  if(t->exit_status == -1)
-	process_wait(t->tid);
 
-done:
+  if(t->exit_status == -1)
+    tid = TID_ERROR;
+
+  while(t->status == THREAD_BLOCKED)
+    thread_unblock(t);
+
+  if(t->exit_status == -1)
+    process_wait(t->tid);
+
+  done:
   free(prog);
   if (tid == TID_ERROR)
       palloc_free_page (fn_copy);
@@ -91,18 +94,13 @@ start_process (void *file_name_)
   size_t len;
 
   t = thread_current();
-  argv_off = palloc_get_page(0);
+  argv_off = malloc(32 * sizeof (int));
   len = strlen(file_name);
   argv_off[0] = 0;
 
   for(input = strtok_r (file_name, " ", &p);
       input != NULL;
       input = strtok_r (NULL, " ", &p)) {
-    if(argc >= MAX_ARG_LEN) {
-      palloc_free_page(file_name);
-      palloc_free_page(argv_off);
-      thread_exit();
-    }
     // Handle spaces
     while (*p == ' ')
       p++;
@@ -112,43 +110,44 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp);
 
   if(success){
-	t->image = filesys_open(file_name);
-	file_deny_write(t->image);
-	/* Set up stack*/
-	if_.esp -= len + 1;
-	start = if_.esp;
-	memcpy (if_.esp, file_name, len + 1);
-	if_.esp -= 4 - (len + 1) % 4; // alignment
-	if_.esp -= 4;
-	*(int *)(if_.esp) = 0; // argv[argc] == 0
+    t->image = filesys_open(file_name);
+    file_deny_write(t->image);
+    /* Set up stack*/
+    if_.esp -= len + 1;
+    start = if_.esp;
+    memcpy (if_.esp, file_name, len + 1);
+    if_.esp -= 4 - (len + 1) % 4; // alignment
+    if_.esp -= 4;
+    *(int *)(if_.esp) = 0; // argv[argc] == 0
 
-	/* Pushing argv[x] */
-	for(i = argc - 1; i >= 0; --i) {
-		if_.esp -= 4;
-		*(void **)(if_.esp) = start + argv_off[i];
-	}
+    /* Pushing argv[x] */
+    for(i = argc - 1; i >= 0; --i) {
+      if_.esp -= 4;
+      *(void **)(if_.esp) = start + argv_off[i];
+    }
 
-	if_.esp -= 4;
-	*(char **)(if_.esp) = (if_.esp + 4); // argv
-	if_.esp -= 4;
-	*(int *)(if_.esp) = argc;
-	if_.esp -= 4;
-	*(int *)(if_.esp) = 0; // return address
+    if_.esp -= 4;
+    *(char **)(if_.esp) = (if_.esp + 4); // argv
+    if_.esp -= 4;
+    *(int *)(if_.esp) = argc;
+    if_.esp -= 4;
+    *(int *)(if_.esp) = 0; // return address
 
-	sema_up(&t->wait);
-	intr_disable ();
-	thread_block ();
-	intr_enable ();
+    sema_up(&t->wait);
+    intr_disable ();
+    thread_block ();
+    intr_enable ();
   } else {
-	t->exit_status = -1;
-	sema_up (&t->wait);
-	intr_disable ();
-	thread_block ();
-	intr_enable ();
-	thread_exit ();
+    free(argv_off);
+    t->exit_status = -1;
+    sema_up (&t->wait);
+    intr_disable ();
+    thread_block ();
+    intr_enable ();
+    thread_exit ();
   }
 
-  palloc_free_page (argv_off);
+  free (argv_off);
   palloc_free_page (file_name);
 
   /* Start the user process by simulating a return from an
@@ -178,7 +177,7 @@ process_wait (tid_t child_tid)
 
   t = get_thread_by_tid(child_tid);
   if (!t || t->status == THREAD_DYING || t->parent == thread_current())
-  	return -1;
+    return -1;
 
   t->parent = thread_current();
   intr_disable ();
@@ -186,8 +185,7 @@ process_wait (tid_t child_tid)
   intr_enable ();
   status = t->exit_status;
   printf ("%s: exit(%d)\n", t->name, t->exit_status);
-  while (t->status == THREAD_BLOCKED)
-    thread_unblock (t);
+  thread_unblock (t);
 
   return status;
 }
@@ -199,11 +197,9 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  /* Print termination message. */
-  // printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+  if(cur->parent)
+    thread_unblock (cur->parent);
 
-  while (cur->parent && cur->parent->status == THREAD_BLOCKED)
-	thread_unblock (cur->parent);
   file_close (cur->image);
   cur->image = NULL;
   intr_disable();

@@ -11,6 +11,7 @@ This project includes 4 sub-projects, they are written by:
 2. [User Programs](http://www.ccs.neu.edu/home/cbw/5600/project2.html)
     * Yaming Huang
     * Borui Gu
+    * Sanat Chugh
 3. [Virtural Memory](http://www.ccs.neu.edu/home/cbw/5600/project3.html)
 4. [File Systems](http://www.ccs.neu.edu/home/cbw/5600/project4.html)
 

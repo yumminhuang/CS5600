@@ -19,7 +19,6 @@
 #include "filesys/filesys.h"
 #include "userprog/process.h"
 
-
 /* Function declarations */
 static void syscall_handler (struct intr_frame *);
 static int halt_handler (void);
@@ -85,15 +84,13 @@ syscall_handler (struct intr_frame *f)
   if (*p < SYS_HALT || *p > SYS_INUMBER)
     goto invalid;
 
-  func = syscall_table[*p];
-
   if (!(is_user_vaddr(p + 1) &&
         is_user_vaddr(p + 2) &&
         is_user_vaddr(p + 3)))
     goto invalid;
 
+  func = syscall_table[*p];
   ret = func(*(p + 1), *(p + 2), *(p + 3));
-
   f->eax = ret;
   return;
 
@@ -137,9 +134,16 @@ exit_handler (int status)
 static int
 exec_handler (const char * cmd_line)
 {
-  if(!cmd_line)
+  int ret;
+
+  if(!cmd_line || ! is_user_vaddr(cmd_line))
     return -1;
-  return process_execute(cmd_line);
+
+  lock_acquire(&lock1);
+  ret = process_execute(cmd_line);
+  lock_release(&lock1);
+
+  return ret;
 }
 
 /* Waits for a child process pid and retrieves the child's exit
@@ -180,7 +184,7 @@ open_handler (const char *file)
   struct file_fd * file_handle;
   struct thread * t = thread_current ();
 
-  if (file == NULL)
+  if (file == NULL || !is_user_vaddr(file))
     exit_handler (-1);
 
   ret_file = filesys_open (file);
@@ -189,9 +193,13 @@ open_handler (const char *file)
     return -1;
 
   file_handle = (struct file_fd *) malloc (sizeof (struct file_fd));
+  if (!file_handle) {
+    /* Not enough memory */
+    file_close(ret_file);
+    return -1;
+  }
   file_handle->file = ret_file;
   file_handle->fd = t->next_fd;
-
   t->next_fd++;
   list_push_back (&t->opened_files, &file_handle->elem);
 
@@ -221,24 +229,25 @@ read_handler (int fd, void *buffer, unsigned size)
 {
   int ret = -1;
 
-  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))  /* if buffer is a bad pointer */
+  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))
+    /* if buffer is a bad pointer */
     exit_handler (-1);
 
   switch (fd)
   {
-    case 1:  /* read from STDOUT should return -1 */
-    break;
+    case STDOUT_FILENO:  /* read from STDOUT should return -1 */
+      break;
 
-  case 0:  /* read from keyboard */
-    lock_acquire (&lock1);
-    ret = read_from_stdin (buffer, size);
-    lock_release (&lock1);
-    break;
+    case STDIN_FILENO:  /* read from keyboard */
+      lock_acquire (&lock1);
+      ret = read_from_stdin (buffer, size);
+      lock_release (&lock1);
+      break;
 
-  default: /* read from file */
-    lock_acquire (&lock1);
-    ret = read_from_file (thread_current (), fd, buffer, size);
-    lock_release (&lock1);
+    default: /* read from file */
+      lock_acquire (&lock1);
+      ret = read_from_file (thread_current (), fd, buffer, size);
+      lock_release (&lock1);
   }
 
   return ret;
@@ -258,9 +267,10 @@ write_handler (int fd, const void *buffer, unsigned size)
 
   switch (fd)
   {
-    case 0:  /* write to STDIN should return -1 */
+    case STDIN_FILENO:  /* write to STDIN should return -1 */
       break;
-    case 1:  /* write to console */
+
+    case STDOUT_FILENO:  /* write to console */
       putbuf(buffer, size);
       ret = size;
       break;
