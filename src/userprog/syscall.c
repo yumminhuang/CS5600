@@ -135,9 +135,16 @@ exit_handler (int status)
 static int
 exec_handler (const char * cmd_line)
 {
+  int ret;
+  
   if(!cmd_line)
     return -1;
-  return process_execute(cmd_line);
+	
+  lock_acquire (&lock1);
+  ret = (int) process_execute(cmd_line);
+  lock_release (&lock1);
+  
+  return ret;
 }
 
 /* Waits for a child process pid and retrieves the child's exit
