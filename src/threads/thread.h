@@ -21,7 +21,6 @@ struct file_fd
   {
     struct file * file;
 	int fd;
-	
 	struct list_elem elem;
   };
 
