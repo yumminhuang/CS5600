@@ -51,14 +51,14 @@ process_execute (const char *file_name)
   if (tid == TID_ERROR)
     goto done;
 
+  /* Wait for child thread to load. */
   t = get_thread_by_tid(tid);
   sema_down(&t->wait);
 
   if(t->exit_status == -1)
     tid = TID_ERROR;
 
-  while(t->status == THREAD_BLOCKED)
-    thread_unblock(t);
+  thread_unblock(t);
 
   if(t->exit_status == -1)
     process_wait(t->tid);
@@ -101,7 +101,7 @@ start_process (void *file_name_)
   for(input = strtok_r (file_name, " ", &p);
       input != NULL;
       input = strtok_r (NULL, " ", &p)) {
-    // Handle spaces
+    // Handle contiguous spaces
     while (*p == ' ')
       p++;
     argv_off[++argc] = p - file_name;

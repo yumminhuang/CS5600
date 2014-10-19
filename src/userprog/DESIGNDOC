@@ -30,19 +30,45 @@ Yaming Huang <yummin@ccs.neu.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+In this task, we don't declare new structure or static variables.
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe how you implemented argument parsing.  How do
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
 
+In process_execute(), I use a strtok_r() to tokenize the input and read it in
+a char array, filename and all the arguments. Then thread_create() will call
+start_process() execute command. In start_process(), I read the file name and
+all arguments from the char array, then save them in the stack.
+
+strtok_r() tokenizes the input string and get arguments in order, so the
+elements of argv[] are in the right order.
+
+To avoid overflowing the stack page, first, when we push any argument to the
+stack, we check the argument length is not larger than available space.
+Second, we make boundary check to make sure each push of argv address does not
+overflow the stack page.
+
 ---- RATIONALE ----
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
 
+strtok() has a static pointer to the last string which can cause problems if
+two processes gets created and strtok() was called by one process when a switch
+happens and the other one starts to call strtok() while the other process
+wasn't finished. strtok_r() has a third argument which is a pointer to the
+string that is supposed to be tokenized further on.
+
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
+
+1. It is much safer and simpler to use the Unix approach, because shell could
+help check any unsafe command line before they arrive at kernel directly.
+2. The Unix approach is more flexible. The command can support more complex
+functions and semantics by adding arguments.
 
                  SYSTEM CALLS
                  ============
@@ -71,6 +97,8 @@ Yaming Huang <yummin@ccs.neu.edu>
 
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
+
+System call wait() will call process_wait().
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
