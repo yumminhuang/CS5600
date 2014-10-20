@@ -79,9 +79,65 @@ functions and semantics by adding arguments.
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+In syscall.c :
+typedef int (*handler) (uint32_t, uint32_t, uint32_t);
+static handler syscall_table[128];
+We define a data type "handler" to build a table associating syscall
+numbers to syscall handler functions
+
+static struct lock lock1;
+We use a lock to avoid racing conditions
+
+In thread.h :
+struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                 /* Thread identifier. */
+    enum thread_status status; /* Thread state. */
+    char name[16];             /* Name (for debugging purposes). */
+    uint8_t *stack;            /* Saved stack pointer. */
+    int priority;              /* Priority. */
+    int64_t wake_time;         /* Tick when sleeping thread should be waked. */
+    struct list_elem allelem;  /* List element for all threads list. */
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;     /* List element. */
+
+#ifdef USERPROG
+    /* Shared between userprog/process.c and userprog/syscall.c. */
+    uint32_t *pagedir;         /* Page directory. */
+    struct thread *parent;     /* Parent process. */
+    struct list opened_files;  /* Files opened by the process */
+    int next_fd;               /* File descriptor for next file */
+    struct file *image;        /* The image file on the disk. */
+    struct semaphore wait;     /* Semaphore for process_wait. */
+    int exit_status;           /* Exit status. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;            /* Detects stack overflow. */
+  };
+Add new members:
+opened_files to describe files opened by the process
+next_fd is the file descriptor for a new file opened by the process
+...
+
+struct file_fd
+  {
+    struct file * file;
+    int fd;
+    struct list_elem elem;
+  };
+Add a new struct file_fd to associate file descriptor with file
+
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
+
+When a file is opened by a process, we create a new instance of file_fd,
+initialize it with the file and its file descriptor, and add the file_fd
+to opened_files list of the process.
+File descriptors are unique just within a single process.
 
 ---- ALGORITHMS ----
 
@@ -136,8 +192,19 @@ System call wait() will call process_wait().
 >> B10: What advantages or disadvantages can you see to your design
 >> for file descriptors?
 
+Advantages:
+We use a list to associate file descriptors to files. The number of
+opened files is not limited, and memory space is allocated dynamically
+so that we will not waste space when number of opened files is small.
+
+Disadvantages:
+There is an O(n) time complexity every time we try to find the associating
+file from a given file descriptor.
+
 >> B11: The default tid_t to pid_t mapping is the identity mapping.
 >> If you changed it, what advantages are there to your approach?
+
+We use default mapping.
 
                SURVEY QUESTIONS
                ================

@@ -30,3 +30,6 @@
 
 # Build directory
 build/*
+
+# Backup Files
+*.bak
