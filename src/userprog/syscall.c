@@ -18,8 +18,6 @@
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "userprog/process.h"
-#include "devices/input.h"
-
 
 /* Function declarations */
 static void syscall_handler (struct intr_frame *);
