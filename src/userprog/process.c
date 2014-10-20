@@ -31,8 +31,8 @@ tid_t
 process_execute (const char *file_name)
 {
   char *fn_copy, *tmp, *prog;
-  tid_t tid;
   struct thread *t;
+  tid_t tid = TID_ERROR;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -46,19 +46,21 @@ process_execute (const char *file_name)
     goto done;
   memcpy(prog, file_name, strlen(file_name) + 1);
   file_name = strtok_r((char *)prog, " ", &tmp);
+
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (prog, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     goto done;
 
+  /* Wait for child thread to load. */
   t = get_thread_by_tid(tid);
   sema_down(&t->wait);
 
   if(t->exit_status == -1)
     tid = TID_ERROR;
 
-  while(t->status == THREAD_BLOCKED)
-    thread_unblock(t);
+  while (t->status == THREAD_BLOCKED)
+    thread_unblock (t);
 
   if(t->exit_status == -1)
     process_wait(t->tid);
@@ -101,7 +103,7 @@ start_process (void *file_name_)
   for(input = strtok_r (file_name, " ", &p);
       input != NULL;
       input = strtok_r (NULL, " ", &p)) {
-    // Handle spaces
+    // Handle contiguous spaces
     while (*p == ' ')
       p++;
     argv_off[++argc] = p - file_name;
@@ -185,7 +187,8 @@ process_wait (tid_t child_tid)
   intr_enable ();
   status = t->exit_status;
   printf ("%s: exit(%d)\n", t->name, t->exit_status);
-  thread_unblock (t);
+  while (t->status == THREAD_BLOCKED)
+    thread_unblock (t);
 
   return status;
 }
@@ -197,7 +200,7 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  if(cur->parent)
+  if(cur->parent && cur->parent->status == THREAD_BLOCKED)
     thread_unblock (cur->parent);
 
   file_close (cur->image);
@@ -571,3 +574,4 @@ install_page (void *upage, void *kpage, bool writable)
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
+
