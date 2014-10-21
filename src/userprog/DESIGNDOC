@@ -79,14 +79,75 @@ functions and semantics by adding arguments.
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+In syscall.c :
+typedef int (*handler) (uint32_t, uint32_t, uint32_t);
+static handler syscall_table[128];
+We define a data type "handler" to build a table associating syscall
+numbers to syscall handler functions
+
+static struct lock lock1;
+We use a lock to avoid racing conditions
+
+In thread.h :
+struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                 /* Thread identifier. */
+    enum thread_status status; /* Thread state. */
+    char name[16];             /* Name (for debugging purposes). */
+    uint8_t *stack;            /* Saved stack pointer. */
+    int priority;              /* Priority. */
+    int64_t wake_time;         /* Tick when sleeping thread should be waked. */
+    struct list_elem allelem;  /* List element for all threads list. */
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;     /* List element. */
+
+#ifdef USERPROG
+    /* Shared between userprog/process.c and userprog/syscall.c. */
+    uint32_t *pagedir;         /* Page directory. */
+    struct thread *parent;     /* Parent process. */
+    struct list opened_files;  /* Files opened by the process */
+    int next_fd;               /* File descriptor for next file */
+    struct file *image;        /* The image file on the disk. */
+    struct semaphore wait;     /* Semaphore for process_wait. */
+    int exit_status;           /* Exit status. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;            /* Detects stack overflow. */
+  };
+Add new members:
+opened_files to describe files opened by the process
+next_fd is the file descriptor for a new file opened by the process
+...
+
+struct file_fd
+  {
+    struct file * file;
+    int fd;
+    struct list_elem elem;
+  };
+Add a new struct file_fd to associate file descriptor with file
+
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
+
+When a file is opened by a process, we create a new instance of file_fd,
+initialize it with the file and its file descriptor, and add the file_fd
+to opened_files list of the process.
+File descriptors are unique just within a single process.
 
 ---- ALGORITHMS ----
 
 >> B3: Describe your code for reading and writing user data from the
 >> kernel.
+
+We check if the address is user address (essentially, if the address
+is below PHYS_BASE), then dereference it. We modify page fault handler
+page_fault() so that an invalid pointer will cause call to 
+exit_handler() and the process will be terminated.
 
 >> B4: Suppose a system call causes a full page (4,096 bytes) of data
 >> to be copied from user space into the kernel.  What is the least
@@ -114,6 +175,28 @@ System call wait() will call process_wait().
 >> paragraphs, describe the strategy or strategies you adopted for
 >> managing these issues.  Give an example.
 
+In syscall_handler(), we first check to ensure the addresses of
+the system call number and the arguments are user virtual addresses. 
+if any of these checks failed, we will call exit_handler() which will 
+terminate the process and cleanup all temporarily allocated resources.
+
+In a system call handler like write_handler() which needs to access an 
+arbitrary amount of user memory, we first check if the addresses in
+the buffer are user virtual addresses. If not, we will call 
+exit_handler() which will do the cleanup.
+
+A bad pointer will cause a page fault. We modify page_fault() that 
+exit_handler() will be called and do the cleanup.
+
+The strategy we adopted take advantage of code reuse, in which 
+exit_handler() will terminate the process and care about cleanup
+resources.
+
+Example: A process calls system call for write, and an address in 
+buffer is invalid. A page fault will occur, the page fault handler
+will call exit_handler(), the process will be terminated and all
+allocated resources are freed.
+
 ---- SYNCHRONIZATION ----
 
 >> B7: The "exec" system call returns -1 if loading the new executable
@@ -133,11 +216,26 @@ System call wait() will call process_wait().
 >> B9: Why did you choose to implement access to user memory from the
 >> kernel in the way that you did?
 
+Because it is suggested that in this way we can take advantage of the
+processor's MMU, so it is normally faster and tends to be used in real
+kernels.
+
 >> B10: What advantages or disadvantages can you see to your design
 >> for file descriptors?
 
+Advantages:
+We use a list to associate file descriptors to files. The number of
+opened files is not limited, and memory space is allocated dynamically
+so that we will not waste space when number of opened files is small.
+
+Disadvantages:
+There is an O(n) time complexity every time we try to find the associating
+file from a given file descriptor.
+
 >> B11: The default tid_t to pid_t mapping is the identity mapping.
 >> If you changed it, what advantages are there to your approach?
+
+We use default mapping.
 
                SURVEY QUESTIONS
                ================
