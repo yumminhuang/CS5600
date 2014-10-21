@@ -39,17 +39,16 @@ In this task, we don't declare new structure or static variables.
 >> How do you avoid overflowing the stack page?
 
 In process_execute(), I use a strtok_r() to tokenize the input and read it in
-a char array, filename and all the arguments. Then thread_create() will call
-start_process() execute command. In start_process(), I read the file name and
-all arguments from the char array, then save them in the stack.
+a char array, includes filename and all the arguments. Then thread_create()
+will call start_process() execute command. In start_process(), I read the file
+name and all arguments from the char array, then save them in the stack.
 
 strtok_r() tokenizes the input string and get arguments in order, so the
 elements of argv[] are in the right order.
 
-To avoid overflowing the stack page, first, when we push any argument to the
-stack, we check the argument length is not larger than available space.
-Second, we make boundary check to make sure each push of argv address does not
-overflow the stack page.
+To avoid overflowing the stack page, we allocate a limited-size memory space
+for arguments based on the limit of 128 bytes on command-line arguments that
+the pintos utility can pass to the kernel.
 
 ---- RATIONALE ----
 
@@ -65,8 +64,8 @@ string that is supposed to be tokenized further on.
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
 
-1. It is much safer and simpler to use the Unix approach, because shell could
-help check any unsafe command line before they arrive at kernel directly.
+1. It is much safer to use the Unix approach, because shell could help check
+any unsafe command line before they arrive at kernel directly.
 2. The Unix approach is more flexible. The command can support more complex
 functions and semantics by adding arguments.
 
@@ -144,10 +143,10 @@ File descriptors are unique just within a single process.
 >> B3: Describe your code for reading and writing user data from the
 >> kernel.
 
-We check if the address is user address (essentially, if the address
-is below PHYS_BASE), then dereference it. We modify page fault handler
-page_fault() so that an invalid pointer will cause call to 
-exit_handler() and the process will be terminated.
+We check if the address is user address by calling is_user_vaddr()
+(essentially, if the address is below PHYS_BASE), then dereference it.
+We modify page fault handler page_fault() so that an invalid pointer will
+cause call to exit_handler() and the process will be terminated.
 
 >> B4: Suppose a system call causes a full page (4,096 bytes) of data
 >> to be copied from user space into the kernel.  What is the least
@@ -159,7 +158,12 @@ exit_handler() and the process will be terminated.
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
 
-System call wait() will call process_wait().
+System call wait() will call process_wait(). In process_wait(), we check
+whether the child process exists, whether the child process is alive and
+whether the process's parent is the current process. If not, return -1.
+Then we will block the current process(parent process) and unblock it after
+the child process has exited. The process_wait() will return the exit status
+of the child process.
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -176,23 +180,24 @@ System call wait() will call process_wait().
 >> managing these issues.  Give an example.
 
 In syscall_handler(), we first check to ensure the addresses of
-the system call number and the arguments are user virtual addresses. 
-if any of these checks failed, we will call exit_handler() which will 
+the system call number and the arguments are user virtual addresses.
+if any of these checks failed, we will call exit_handler() which will
 terminate the process and cleanup all temporarily allocated resources.
 
-In a system call handler like write_handler() which needs to access an 
+In a system call handler like write_handler() which needs to access an
 arbitrary amount of user memory, we first check if the addresses in
-the buffer are user virtual addresses. If not, we will call 
+the buffer are user virtual addresses. If not, we will call
 exit_handler() which will do the cleanup.
 
-A bad pointer will cause a page fault. We modify page_fault() that 
-exit_handler() will be called and do the cleanup.
+A bad pointer will cause a page fault. We modify page_fault() so that when a
+bad pointer occurs, exit_handler() will be called to exit process and
+deallocate memory.
 
-The strategy we adopted take advantage of code reuse, in which 
-exit_handler() will terminate the process and care about cleanup
-resources.
+The strategy we adopted is check whether addresses are user virtual addresses.
+We also take advantage of code reuse, in which exit_handler() will terminate
+the process and care about cleanup resources.
 
-Example: A process calls system call for write, and an address in 
+Example: A process calls system call for write, and an address in
 buffer is invalid. A page fault will occur, the page fault handler
 will call exit_handler(), the process will be terminated and all
 allocated resources are freed.
@@ -204,12 +209,19 @@ allocated resources are freed.
 >> loading.  How does your code ensure this?  How is the load
 >> success/failure status passed back to the thread that calls "exec"?
 
+In start_process(), there is a boolean variable 'success', which indicates
+whether load() is successful or failed. If load() failed, we will set
+exit_status as -1 and exit the process.
+
 >> B8: Consider parent process P with child process C.  How do you
 >> ensure proper synchronization and avoid race conditions when P
 >> calls wait(C) before C exits?  After C exits?  How do you ensure
 >> that all resources are freed in each case?  How about when P
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
+
+In process_wait(), we will check whether child process exists first. If not,
+process_wait() will return -1.
 
 ---- RATIONALE ----
 
@@ -249,14 +261,24 @@ the quarter.
 >> In your opinion, was this assignment, or any one of the three problems
 >> in it, too easy or too hard?  Did it take too long or too little time?
 
+It is harder than Project 1. We spent more time on this project.
+
 >> Did you find that working on a particular part of the assignment gave
 >> you greater insight into some aspect of OS design?
+
+Yes. Espeically about virtual memory and function call.
 
 >> Is there some particular fact or hint we should give students in
 >> future quarters to help them solve the problems?  Conversely, did you
 >> find any of our guidance to be misleading?
 
+No.
+
 >> Do you have any suggestions for the TAs to more effectively assist
 >> students, either for future quarters or the remaining projects?
 
+No.
+
 >> Any other comments?
+
+No.

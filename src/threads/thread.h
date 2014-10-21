@@ -16,12 +16,12 @@ enum thread_status
     THREAD_SLEEPING     /* Sleeping thread. */
   };
 
-/* File and its file descriptor opened by a process */  
+/* File and its file descriptor opened by a process */
 struct file_fd
   {
     struct file * file;
-	int fd;
-	struct list_elem elem;
+    int fd;
+    struct list_elem elem;
   };
 
 /* Thread identifier type.
@@ -110,12 +110,12 @@ struct thread
     uint32_t *pagedir;         /* Page directory. */
     struct thread *parent;     /* Parent process. */
     struct list opened_files;  /* Files opened by the process */
-	int next_fd;               /* File descriptor for next file */	
     struct file *image;        /* The image file on the disk. */
     struct semaphore wait;     /* Semaphore for process_wait. */
+    int next_fd;               /* File descriptor for next file */
     int exit_status;           /* Exit status. */
 #endif
-	
+
     /* Owned by thread.c. */
     unsigned magic;            /* Detects stack overflow. */
   };
