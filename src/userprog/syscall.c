@@ -70,6 +70,21 @@ syscall_init (void)
   lock_init (&lock1);
 }
 
+int
+user_to_kernel_ptr(const void *addr) {
+  if(!is_user_vaddr(addr))
+	exit_handler(-1);
+  void *ptr = pagedir_get_page(thread_current()->pagedir, addr);
+  if(!ptr)
+	exit_handler(-1);
+  return (int)ptr;
+}
+
+bool
+check_valid_buffer(void* buffer, unsigned size) {
+  return is_user_vaddr(buffer + size);
+}
+
 static void
 syscall_handler (struct intr_frame *f)
 {
@@ -77,11 +92,10 @@ syscall_handler (struct intr_frame *f)
   int *p, ret;
 
   p = f->esp;
-
   if (!is_user_vaddr(p))
     exit_handler(-1);
 
-  if (*p < SYS_HALT || *p > SYS_INUMBER)
+  if ((*p < SYS_HALT) || (*p > SYS_INUMBER))
     exit_handler(-1);
 
   if (!(is_user_vaddr(p + 1) &&
@@ -89,6 +103,11 @@ syscall_handler (struct intr_frame *f)
         is_user_vaddr(p + 3)))
     exit_handler(-1);
 
+  if((*p == SYS_READ) || (*p == SYS_WRITE))
+	  if (!check_valid_buffer(*(p + 2), *(p + 3)))
+	    exit_handler(-1);
+
+  p = user_to_kernel_ptr((const void*)f->esp);
   func = syscall_table[*p];
   ret = func(*(p + 1), *(p + 2), *(p + 3));
   f->eax = ret;
@@ -133,7 +152,7 @@ exec_handler (const char * cmd_line)
 {
   int ret;
 
-  if(!cmd_line || ! is_user_vaddr(cmd_line))
+  if(!cmd_line)
     return -1;
 
   lock_acquire(&lock1);
@@ -167,9 +186,7 @@ static int
 remove_handler (const char *file)
 {
   if (!file)
-  return 0;
-  if (!is_user_vaddr (file))
-    exit_handler (-1);
+    return 0;
   return filesys_remove (file);
 }
 
@@ -181,7 +198,7 @@ open_handler (const char *file)
   struct file_fd * file_handle;
   struct thread * t = thread_current ();
 
-  if (file == NULL || !is_user_vaddr(file))
+  if (file == NULL)
     exit_handler (-1);
 
   ret_file = filesys_open (file);
@@ -226,10 +243,6 @@ read_handler (int fd, void *buffer, unsigned size)
 {
   int ret = -1;
 
-  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))
-    /* if buffer is a bad pointer */
-    exit_handler (-1);
-
   switch (fd)
   {
     case STDOUT_FILENO:  /* read from STDOUT should return -1 */
@@ -257,10 +270,6 @@ static int
 write_handler (int fd, const void *buffer, unsigned size)
 {
   int ret = -1;
-
-  if ((!is_user_vaddr (buffer)) || ((!is_user_vaddr (buffer + size))))
-    /* if buffer is a bad pointer */
-  exit_handler (-1);
 
   switch (fd)
   {

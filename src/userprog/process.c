@@ -178,13 +178,18 @@ process_wait (tid_t child_tid)
   int status;
 
   t = get_thread_by_tid(child_tid);
-  if (!t || t->status == THREAD_DYING || t->parent == thread_current())
-    return -1;
+  if (!t || t->status == THREAD_DYING || t->waiting)
+	// Invalid, return -1
+	return -1;
 
-  t->parent = thread_current();
-  intr_disable ();
-  thread_block ();
-  intr_enable ();
+  if (t->exit_status != DEFAULT_EXIT_STATUS)
+	// Has a exit status
+	return t->exit_status;
+
+  t->waiting = true; // Avoid wait twice problem
+  if(!t->exited)
+	sema_down(&t->wait);
+
   status = t->exit_status;
   printf ("%s: exit(%d)\n", t->name, t->exit_status);
   while (t->status == THREAD_BLOCKED)
@@ -200,14 +205,17 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  if(cur->parent && cur->parent->status == THREAD_BLOCKED)
-    thread_unblock (cur->parent);
+  while (!list_empty(&cur->wait.waiters))
+    sema_up(&cur->wait);
 
   file_close (cur->image);
   cur->image = NULL;
-  intr_disable();
-  thread_block();
-  intr_enable();
+  cur->exited = true;
+  if(cur->parent) {
+	intr_disable();
+	thread_block();
+	intr_enable();
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
