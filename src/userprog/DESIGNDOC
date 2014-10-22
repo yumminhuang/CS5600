@@ -81,8 +81,8 @@ functions and semantics by adding arguments.
 In syscall.c :
 typedef int (*handler) (uint32_t, uint32_t, uint32_t);
 static handler syscall_table[128];
-We define a data type "handler" to build a table associating syscall
-numbers to syscall handler functions
+We define a data type "handler" to build the system call table associating
+syscall index to syscall handler functions
 
 static struct lock lock1;
 We use a lock to avoid racing conditions
@@ -116,10 +116,14 @@ struct thread
     /* Owned by thread.c. */
     unsigned magic;            /* Detects stack overflow. */
   };
-Add new members:
-opened_files to describe files opened by the process
-next_fd is the file descriptor for a new file opened by the process
-...
+
+Add some new members in struct thread:
+struct thread *parent: Parent process.
+struct list opened_files: Files opened by the proces.
+int next_fd: File descriptor for next file
+struct file *image: The image file on the disk.
+struct semaphore wait: Semaphore for process_wait.
+int exit_status: Exit status.
 
 struct file_fd
   {
@@ -127,7 +131,7 @@ struct file_fd
     int fd;
     struct list_elem elem;
   };
-Add a new struct file_fd to associate file descriptor with file
+Add a new struct file_fd to associate file descriptor with file.
 
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
@@ -220,8 +224,14 @@ exit_status as -1 and exit the process.
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
 
-In process_wait(), we will check whether child process exists first. If not,
+In process_wait(), we will check whether child process exists first. Otherwise,
 process_wait() will return -1.
+If P calls wait(C) before C exits, wait() will return -1 and no race conditions
+happen. All resources will be freed when P exits. If P calls wait(C) after C
+exits, P will wait till C exits and return exit status of C. When P exits, all
+resources will be freed.
+If P terminates without waiting, before C exits, P will exit and free resources
+as a normal process. If P terminates without waiting, after C exits,
 
 ---- RATIONALE ----
 
