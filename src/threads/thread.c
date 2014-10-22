@@ -213,9 +213,15 @@ thread_create (const char *name, int priority,
 #ifdef USERPROG
   // Initialize wait semaphore
   sema_init(&t->wait, 0);
-  t->exit_status = 0;
+  t->exit_status = DEFAULT_EXIT_STATUS;
   list_init(&t->opened_files);
-  t->parent = NULL;
+  // Initialize child processes list
+  list_init (&t->children);
+  if (thread_current () != initial_thread)
+    list_push_back (&thread_current ()->children, &t->child_elem);
+  t->parent = thread_current();
+  t->exited = false;
+  t->waiting = false;
 #endif
 
   return tid;
@@ -300,7 +306,27 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
+  struct list_elem *e;
+  struct thread *t, *cur;
+
+  cur = thread_current();
+  // Unblock child processes
+  for(e = list_begin(&cur->children);
+	  e != list_end(&cur->children);
+	  e = list_next(e)) {
+	  t = list_entry (e, struct thread, child_elem);
+	if(t->status == THREAD_BLOCKED && t->exited)
+      thread_unblock(t);
+	else {
+	  t->parent = NULL;
+	  list_remove(&t->child_elem);
+	}
+  }
   process_exit ();
+
+  // Remove it from parent's children list
+  if (cur->parent && cur->parent != initial_thread)
+    list_remove(&cur->child_elem);
 #endif
 
   /* Remove thread from all threads list, set our status to dying,

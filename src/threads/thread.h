@@ -29,6 +29,7 @@ struct file_fd
 typedef int tid_t;
 typedef int pid_t;
 #define TID_ERROR ((tid_t) - 1)          /* Error value for tid_t. */
+#define DEFAULT_EXIT_STATUS 5600
 
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
@@ -112,8 +113,12 @@ struct thread
     struct list opened_files;  /* Files opened by the process */
     struct file *image;        /* The image file on the disk. */
     struct semaphore wait;     /* Semaphore for process_wait. */
-    int next_fd;               /* File descriptor for next file */
-    int exit_status;           /* Exit status. */
+    struct list children;      /* All children process */
+    struct list_elem child_elem;
+    bool exited;                /* whether the thread is exited. */
+    bool waiting;               /* whether the thread is waiting. */
+    int next_fd;                /* File descriptor for next file */
+    int exit_status;            /* Exit status. */
 #endif
 
     /* Owned by thread.c. */
