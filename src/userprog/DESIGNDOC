@@ -66,8 +66,9 @@ string that is supposed to be tokenized further on.
 
 1. It is much safer to use the Unix approach, because shell could help check
 any unsafe command line before they arrive at kernel directly.
-2. The Unix approach is more flexible. The command can support more complex
-functions and semantics by adding arguments.
+2. It makes the shell allocate memory for argument passing, instead of the
+kernel. That will improve robustness, since if the kernel runs out of memory,
+that might crash the entire system.
 
                  SYSTEM CALLS
                  ============
@@ -107,10 +108,14 @@ struct thread
     uint32_t *pagedir;         /* Page directory. */
     struct thread *parent;     /* Parent process. */
     struct list opened_files;  /* Files opened by the process */
-    int next_fd;               /* File descriptor for next file */
     struct file *image;        /* The image file on the disk. */
     struct semaphore wait;     /* Semaphore for process_wait. */
-    int exit_status;           /* Exit status. */
+    struct list children;      /* All children process */
+    struct list_elem child_elem;
+    bool exited;                /* whether the thread is exited. */
+    bool waiting;               /* whether the thread is waiting. */
+    int next_fd;                /* File descriptor for next file */
+    int exit_status;            /* Exit status. */
 #endif
 
     /* Owned by thread.c. */
@@ -123,6 +128,10 @@ struct list opened_files: Files opened by the proces.
 int next_fd: File descriptor for next file
 struct file *image: The image file on the disk.
 struct semaphore wait: Semaphore for process_wait.
+struct list children: List of children processes
+struct list_elem child_elem; the element of child process in list
+bool exited: whether the thread is exited or not.
+bool waiting: whether the thread is waiting or not.
 int exit_status: Exit status.
 
 struct file_fd
@@ -132,6 +141,9 @@ struct file_fd
     struct list_elem elem;
   };
 Add a new struct file_fd to associate file descriptor with file.
+
+#define DEFAULT_EXIT_STATUS 5600
+We define a number as the default exit status
 
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
@@ -172,10 +184,10 @@ same is a system call that copies 2 bytes of data.
 
 System call wait() will call process_wait(). In process_wait(), we check
 whether the child process exists, whether the child process is alive and
-whether the process's parent is the current process. If not, return -1.
-Then we will block the current process(parent process) and unblock it after
-the child process has exited. The process_wait() will return the exit status
-of the child process.
+whether the process is already waiting. If not, return -1. Then we will use
+semaphore to make the parent process wait till the child process has exited
+(When the child process exit, it will call sema_up() to unblock its parent
+process). The process_wait() will return the exit status of the child process.
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -232,14 +244,21 @@ exit_status as -1 and exit the process.
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
 
-In process_wait(), we will check whether child process exists first. Otherwise,
+In process_wait(), we will check whether the child process exists, whether the
+child process is alive and whether the process is waiting. Otherwise,
 process_wait() will return -1.
-If P calls wait(C) before C exits, wait() will return -1 and no race conditions
-happen. All resources will be freed when P exits. If P calls wait(C) after C
-exits, P will wait till C exits and return exit status of C. When P exits, all
-resources will be freed.
-If P terminates without waiting, before C exits, P will exit and free resources
-as a normal process. If P terminates without waiting, after C exits,
+
+If P calls wait(C) before C exits, P will be blocked and wait till C exits. If
+P calls wait(C) after C exits. the flag exited is true, so sema_down will not
+be called. The resource of C will be deallocated after it exits.
+
+If P terminates without waiting before C exits, waiters in semaphore wait is
+empty and therefore skip calling sema_up() . If P terminates without waiting
+after C exits, P will exit as a normal process. The resources of C are freed
+once P completes a wait for C.
+
+The special case is the initial process, which has no parent. The parent of
+initial process is NULL.
 
 ---- RATIONALE ----
 
