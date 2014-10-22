@@ -159,6 +159,14 @@ cause call to exit_handler() and the process will be terminated.
 >> for a system call that only copies 2 bytes of data?  Is there room
 >> for improvement in these numbers, and how much?
 
+A system call that copies a full page (4,096 bytes) of data will lead 
+to 4,096 calls to pagedir_get_page(). A system call that copies 2 
+bytes of data will lead to 2 calls to pagedir_get_page().
+
+There is room for improvement. A system call that copies a full page 
+(4,096 bytes) of data might make 1 or 2 calls to pagedir_get_page(),
+same is a system call that copies 2 bytes of data.
+
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
 
