@@ -5,96 +5,97 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "vm/frame.h"
 
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
 
 /* Creates a new page directory that has mappings for kernel
-   virtual addresses, but none for user virtual addresses.
-   Returns the new page directory, or a null pointer if memory
-   allocation fails. */
+     virtual addresses, but none for user virtual addresses.
+     Returns the new page directory, or a null pointer if memory
+     allocation fails. */
 uint32_t *
 pagedir_create (void)
 {
-  uint32_t *pd = palloc_get_page (0);
-  if (pd != NULL)
-    memcpy (pd, init_page_dir, PGSIZE);
-  return pd;
+    uint32_t *pd = palloc_get_page (0);
+    if (pd != NULL)
+        memcpy (pd, init_page_dir, PGSIZE);
+    return pd;
 }
 
 /* Destroys page directory PD, freeing all the pages it
-   references. */
+     references. */
 void
 pagedir_destroy (uint32_t *pd)
 {
-  uint32_t *pde;
+    uint32_t *pde;
 
-  if (pd == NULL)
-    return;
+    if (pd == NULL)
+        return;
 
-  ASSERT (pd != init_page_dir);
-  for (pde = pd; pde < pd + pd_no (PHYS_BASE); pde++)
-    if (*pde & PTE_P)
-      {
-        uint32_t *pt = pde_get_pt (*pde);
-        uint32_t *pte;
+    ASSERT (pd != init_page_dir);
+    for (pde = pd; pde < pd + pd_no (PHYS_BASE); pde++)
+        if (*pde & PTE_P)
+            {
+                uint32_t *pt = pde_get_pt (*pde);
+                uint32_t *pte;
 
-        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P)
-            palloc_free_page (pte_get_page (*pte));
-        palloc_free_page (pt);
-      }
-  palloc_free_page (pd);
+                for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
+                    if (*pte & PTE_P)
+                        palloc_free_page (pte_get_page (*pte));
+                palloc_free_page (pt);
+            }
+    palloc_free_page (pd);
 }
 
 /* Returns the address of the page table entry for virtual
-   address VADDR in page directory PD.
-   If PD does not have a page table for VADDR, behavior depends
-   on CREATE.  If CREATE is true, then a new page table is
-   created and a pointer into it is returned.  Otherwise, a null
-   pointer is returned. */
+     address VADDR in page directory PD.
+     If PD does not have a page table for VADDR, behavior depends
+     on CREATE.  If CREATE is true, then a new page table is
+     created and a pointer into it is returned.  Otherwise, a null
+     pointer is returned. */
 static uint32_t *
 lookup_page (uint32_t *pd, const void *vaddr, bool create)
 {
-  uint32_t *pt, *pde;
+    uint32_t *pt, *pde;
 
-  ASSERT (pd != NULL);
+    ASSERT (pd != NULL);
 
-  /* Shouldn't create new kernel virtual mappings. */
-  ASSERT (!create || is_user_vaddr (vaddr));
+    /* Shouldn't create new kernel virtual mappings. */
+    ASSERT (!create || is_user_vaddr (vaddr));
 
-  /* Check for a page table for VADDR.
-     If one is missing, create one if requested. */
-  pde = pd + pd_no (vaddr);
-  if (*pde == 0)
-    {
-      if (create)
+    /* Check for a page table for VADDR.
+         If one is missing, create one if requested. */
+    pde = pd + pd_no (vaddr);
+    if (*pde == 0)
         {
-          pt = palloc_get_page (PAL_ZERO);
-          if (pt == NULL)
-            return NULL;
+            if (create)
+                {
+                    pt = palloc_get_page (PAL_ZERO);
+                    if (pt == NULL)
+                        return NULL;
 
-          *pde = pde_create (pt);
+                    *pde = pde_create (pt);
+                }
+            else
+                return NULL;
         }
-      else
-        return NULL;
-    }
 
-  /* Return the page table entry. */
-  pt = pde_get_pt (*pde);
-  return &pt[pt_no (vaddr)];
+    /* Return the page table entry. */
+    pt = pde_get_pt (*pde);
+    return &pt[pt_no (vaddr)];
 }
 
 /* Adds a mapping in page directory PD from user virtual page
-   UPAGE to the physical frame identified by kernel virtual
-   address KPAGE.
-   UPAGE must not already be mapped.
-   KPAGE should probably be a page obtained from the user pool
-   with palloc_get_page().
-   If WRITABLE is true, the new page is read/write;
-   otherwise it is read-only.
-   Returns true if successful, false if memory allocation
-   failed. */
+     UPAGE to the physical frame identified by kernel virtual
+     address KPAGE.
+     UPAGE must not already be mapped.
+     KPAGE should probably be a page obtained from the user pool
+     with palloc_get_page().
+     If WRITABLE is true, the new page is read/write;
+     otherwise it is read-only.
+     Returns true if successful, false if memory allocation
+     failed. */
 bool
 pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
 {
@@ -112,6 +113,7 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
     {
       ASSERT ((*pte & PTE_P) == 0);
       *pte = pte_create_user (kpage, writable);
+      assign_page_to_frame(kpage, upage);
       return true;
     }
   else

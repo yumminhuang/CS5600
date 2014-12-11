@@ -50,7 +50,7 @@
         ({                                                      \
           int retval;                                           \
           asm volatile                                          \
-            ("pushl %[arg2]; pushl %[arg1]; pushl %[arg0]; "    \
+            ("pushl %[arg2]; pushl %[arg1]; pushl %[arg0]; "	 \
              "pushl %[number]; int $0x30; addl $16, %%esp"      \
                : "=a" (retval)                                  \
                : [number] "i" (NUMBER),                         \

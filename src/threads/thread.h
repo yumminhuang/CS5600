@@ -3,8 +3,9 @@
 
 #include <debug.h>
 #include <list.h>
+#include <hash.h>
 #include <stdint.h>
-#include "threads/synch.h"
+#include <threads/synch.h>
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -12,24 +13,21 @@ enum thread_status
     THREAD_RUNNING,     /* Running thread. */
     THREAD_READY,       /* Not running but ready to run. */
     THREAD_BLOCKED,     /* Waiting for an event to trigger. */
-    THREAD_DYING,       /* About to be destroyed. */
-    THREAD_SLEEPING     /* Sleeping thread. */
+    THREAD_DYING        /* About to be destroyed. */
   };
 
-/* File and its file descriptor opened by a process */
-struct file_fd
+enum child_state
   {
-    struct file * file;
-    int fd;
-    struct list_elem elem;
+    CHILD_LOADING,          /* Child process is loading. */
+    CHILD_LOAD_FAILED,      /* Child process failed to load. */
+    CHILD_LOAD_SUCCESS,     /* Child process succeded to load. */
+    CHILD_EXITING           /* About to exit. */
   };
 
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
-typedef int pid_t;
-#define TID_ERROR ((tid_t) - 1)          /* Error value for tid_t. */
-#define DEFAULT_EXIT_STATUS 5600
+#define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
@@ -95,34 +93,34 @@ typedef int pid_t;
 struct thread
   {
     /* Owned by thread.c. */
-    tid_t tid;                 /* Thread identifier. */
-    enum thread_status status; /* Thread state. */
-    char name[16];             /* Name (for debugging purposes). */
-    uint8_t *stack;            /* Saved stack pointer. */
-    int priority;              /* Priority. */
-    int64_t wake_time;         /* Tick when sleeping thread should be waked. */
-    struct list_elem allelem;  /* List element for all threads list. */
+    tid_t tid;                          /* Thread identifier. */
+    enum thread_status status;          /* Thread state. */
+    char name[16];                      /* Name (for debugging purposes). */
+    uint8_t *stack;                     /* Saved stack pointer. */
+    int priority;                       /* Priority. */
+    struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
-    struct list_elem elem;     /* List element. */
+    struct list_elem elem;              /* List element. */
 
+    struct thread *parent;              /* Parent of this thread */
+    /* Hash table for tracking status of thread's children */
+    struct hash children;
+    /* Hash table for tracking thread's file descriptors */
+    struct hash fds;
+    struct file *exec;                  /* Pointer to process executable */
+	struct list_elem exec_elem;         /* List element of the executable to thread mapping. */
+    unsigned short fd_cnt;              /* "Sequence" for file descriptors */
+	struct hash mapids;					/* Hash table for tracking thread's mapids */
+	unsigned short mapid_cnt;           /* "Sequence" for mapids */
 #ifdef USERPROG
-    /* Shared between userprog/process.c and userprog/syscall.c. */
-    uint32_t *pagedir;         /* Page directory. */
-    struct thread *parent;     /* Parent process. */
-    struct list opened_files;  /* Files opened by the process */
-    struct file *image;        /* The image file on the disk. */
-    struct semaphore wait;     /* Semaphore for process_wait. */
-    struct list children;      /* All children process */
-    struct list_elem child_elem;
-    bool exited;                /* whether the thread is exited. */
-    bool waiting;               /* whether the thread is waiting. */
-    int next_fd;                /* File descriptor for next file */
-    int exit_status;            /* Exit status. */
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                  /* Page directory. */
 #endif
+    struct hash page_table;             /* Supplemental page table */
 
     /* Owned by thread.c. */
-    unsigned magic;            /* Detects stack overflow. */
+    unsigned magic;                     /* Detects stack overflow. */
   };
 
 /* If false (default), use round-robin scheduler.
@@ -148,7 +146,6 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
-void thread_sleep (int64_t);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
@@ -162,6 +159,33 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
-struct thread* get_thread_by_tid(tid_t);
+struct childtracker {
+  tid_t child_id;                 /* Id of the child process */
+  struct thread *child;           /* Pointer to the child */
+  struct lock wait_lock;          /* Lock guarding child status fields */
+  struct condition wait_cond;
+  /* Condvar on which paent wait for child status updates */
+  int exit_status;              /* Child's exit status */
+  enum child_state state;       /* Child's state */
+  struct hash_elem elem;        /* Hash table element */
+};
+
+struct childtracker *find_child_rec (struct thread *t, tid_t child_id);
+
+/* Used to control max number of files allowed to opened by process */
+#define MAX_FILES 126
+
+struct fd_to_file {
+  int fd;                     /* File descriptor id. */
+  struct file *file_ptr;      /* Pointer to the opened file. */
+  struct hash_elem elem;      /* Hash table element. */
+};
+
+struct mapping {
+  int mapid;                  /* Mapping id */
+  void *addr;                 /* Virtual address of first page */
+  int pnum;                   /* Number of virtual pages */
+  struct hash_elem elem;      /* Hash table element */
+};
 
 #endif /* threads/thread.h */

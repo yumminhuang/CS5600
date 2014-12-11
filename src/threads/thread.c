@@ -1,7 +1,8 @@
 #include "threads/thread.h"
 #include <debug.h>
-#include <stddef.h>
+#include <hash.h>
 #include <random.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include "threads/flags.h"
@@ -13,7 +14,9 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #endif
+#include "vm/page.h"
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -23,9 +26,6 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
-
-/* List of processes in THREAD_SLEEPING state. */
-static struct list sleeping_list;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -73,6 +73,18 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+unsigned fds_hash_func (const struct hash_elem *e, void *aux);
+bool fds_hash_less_func (const struct hash_elem *a,
+             const struct hash_elem *b,
+             void *aux);
+unsigned ct_hash_func (const struct hash_elem *e, void *aux UNUSED);
+bool ct_hash_less_func (const struct hash_elem *a,
+            const struct hash_elem *b,
+            void *aux UNUSED);
+unsigned mapid_hash_func (const struct hash_elem *e, void *aux);
+bool mapid_hash_less_func (const struct hash_elem *a,
+             const struct hash_elem *b,
+             void *aux);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -94,7 +106,6 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
-  list_init (&sleeping_list);
   list_init (&all_list);
 
   /* Set up a thread structure for the running thread. */
@@ -109,9 +120,13 @@ thread_init (void)
 void
 thread_start (void)
 {
+  //Initialize children list for initial thread
+  hash_init(&thread_current()->children, ct_hash_func, ct_hash_less_func, NULL);
+
   /* Create the idle thread. */
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
+
   thread_create ("idle", PRI_MIN, idle, &idle_started);
 
   /* Start preemptive thread scheduling. */
@@ -175,7 +190,6 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
-  enum intr_level old_level;
 
   ASSERT (function != NULL);
 
@@ -187,9 +201,27 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+  //child-parent
+  t->parent = thread_current();
+  /* Init children, fds, mapids list and exit controls
+   for all descendants of initial thread, except idle */
+  if (!hash_empty(&t->parent->children)) {
+    struct childtracker ct_q;
+    ct_q.child_id = TID_ERROR;
+    struct hash_elem *ect = hash_delete(&t->parent->children, &ct_q.elem);
+    struct childtracker *ct  = hash_entry(ect, struct childtracker, elem);
+    ct->child_id = tid;
+    ct->child = thread_current();
+    hash_insert(&t->parent->children, &ct->elem);
+    hash_init(&t->children, ct_hash_func, ct_hash_less_func, NULL);
+    hash_init(&t->fds, fds_hash_func, fds_hash_less_func, &filesyslock);
+	hash_init(&t->mapids, mapid_hash_func, mapid_hash_less_func, NULL);
+    t->fd_cnt = 1;
+	t->mapid_cnt = 1;
+  }
 
-  // Prepare thread for first run by initializing its stack.
-  old_level = intr_disable();
+  /* Initialize supplemental page table */
+  hash_init (&t->page_table, page_hash, page_less, NULL);
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -206,23 +238,8 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-  intr_set_level (old_level);
   /* Add to run queue. */
   thread_unblock (t);
-
-#ifdef USERPROG
-  // Initialize wait semaphore
-  sema_init(&t->wait, 0);
-  t->exit_status = DEFAULT_EXIT_STATUS;
-  list_init(&t->opened_files);
-  // Initialize child processes list
-  list_init (&t->children);
-  if (thread_current () != initial_thread)
-    list_push_back (&thread_current ()->children, &t->child_elem);
-  t->parent = thread_current();
-  t->exited = false;
-  t->waiting = false;
-#endif
 
   return tid;
 }
@@ -306,27 +323,7 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  struct list_elem *e;
-  struct thread *t, *cur;
-
-  cur = thread_current();
-  // Unblock child processes
-  for(e = list_begin(&cur->children);
-	  e != list_end(&cur->children);
-	  e = list_next(e)) {
-	  t = list_entry (e, struct thread, child_elem);
-	if(t->status == THREAD_BLOCKED && t->exited)
-      thread_unblock(t);
-	else {
-	  t->parent = NULL;
-	  list_remove(&t->child_elem);
-	}
-  }
   process_exit ();
-
-  // Remove it from parent's children list
-  if (cur->parent && cur->parent != initial_thread)
-    list_remove(&cur->child_elem);
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
@@ -354,21 +351,6 @@ thread_yield (void)
     list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
-  intr_set_level (old_level);
-}
-
-/* Change thread state to THREAD_SLEEPING. */
-void thread_sleep (int64_t ticks) {
-  struct thread *cur = thread_current();
-  enum intr_level old_level;
-
-  old_level = intr_disable ();
-  if (cur != idle_thread) {
-    list_push_back(&sleeping_list, &cur->elem);
-    cur->status = THREAD_SLEEPING;
-    cur->wake_time = timer_ticks() + ticks;
-    schedule ();
-  }
   intr_set_level (old_level);
 }
 
@@ -520,13 +502,6 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
-  // thread is not in sleeping_list
-  t->wake_time = 0;
-
-  list_init (&t->opened_files);
-  /* initialize next_fd to 2 as 0 and 1 are reserved for console */
-  t->next_fd = 2;
-
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -617,23 +592,6 @@ thread_schedule_tail (struct thread *prev)
 static void
 schedule (void)
 {
-  struct list_elem *temp, *e = list_begin (&sleeping_list);
-  int64_t cur_ticks = timer_ticks();
-
-  //Check sleeping list
-  for(e = list_begin(&sleeping_list);
-      e != list_end(&sleeping_list);
-      e = list_next(e)) {
-    struct thread *t = list_entry (e, struct thread, elem);
-    if (t->wake_time <= timer_ticks()) {
-      e = (list_remove(&t->elem))->prev;
-      // Add it into ready list
-      list_push_back(&ready_list, &t->elem);
-      t->status = THREAD_READY;
-      t->wake_time = 0;
-    }
-  }
-
   struct thread *cur = running_thread ();
   struct thread *next = next_thread_to_run ();
   struct thread *prev = NULL;
@@ -661,21 +619,63 @@ allocate_tid (void)
   return tid;
 }
 
-/* Return the thread with the given tid. */
-struct thread *
-get_thread_by_tid(tid_t tid){
-  struct list_elem *e;
-  struct thread *t = NULL;
-
-  for(e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
-    t = list_entry(e, struct thread, allelem);
-    ASSERT(is_thread(t));
-
-    if(t->tid == tid)
-      return t;
-  }
-  return NULL;
+/* Returns hash of the fd_to_file. */
+unsigned fds_hash_func (const struct hash_elem *e, void *aux UNUSED) {
+  struct fd_to_file *ftf = hash_entry(e, struct fd_to_file, elem);
+  return ftf->fd;
 }
+
+/* Returns true if file descriptor id of the fd_to_file a is less than
+   file descriptor id of the fd_to_file b. */
+bool fds_hash_less_func (const struct hash_elem *a,
+             const struct hash_elem *b,
+             void *aux UNUSED) {
+  struct fd_to_file *ftf_a = hash_entry (a, struct fd_to_file, elem);
+  struct fd_to_file *ftf_b = hash_entry (b, struct fd_to_file, elem);
+  return ftf_a->fd < ftf_b->fd;
+}
+
+/* Returns hash of the childtracker key. */
+unsigned ct_hash_func (const struct hash_elem *e, void *aux UNUSED) {
+  struct childtracker *ct = hash_entry(e, struct childtracker, elem);
+  return hash_int(ct->child_id);
+}
+
+/* Returns true if child id of childtracker a is less than
+   child id of the childtracker b. */
+bool ct_hash_less_func (const struct hash_elem *a,
+            const struct hash_elem *b,
+            void *aux UNUSED) {
+  struct childtracker *ct_a = hash_entry (a, struct childtracker, elem);
+  struct childtracker *ct_b = hash_entry (b, struct childtracker, elem);
+  return ct_a->child_id < ct_b->child_id;
+}
+
+unsigned mapid_hash_func (const struct hash_elem *e, void *aux UNUSED) {
+	struct mapping *m = hash_entry (e, struct mapping, elem);
+	return m->mapid;
+}
+bool mapid_hash_less_func (const struct hash_elem *a,
+             const struct hash_elem *b,
+             void *aux) {
+	struct mapping *m_a = hash_entry (a, struct mapping, elem);
+	struct mapping *m_b = hash_entry (b, struct mapping, elem);
+	return m_a->mapid < m_b->mapid;
+}
+
+/* Given id of the child process returns pointer to the corresponding
+   childracker from the children hash table of the thread pointed to by
+   given pointer t, if hash table does not contain such childtracker
+   - returns NULL. */
+struct childtracker *find_child_rec (struct thread *t, tid_t child_id) {
+  struct childtracker ct;
+  struct hash_elem *e;
+
+  ct.child_id = child_id;
+  e = hash_find(&t->children, &ct.elem);
+  return e != NULL ? hash_entry (e, struct childtracker, elem) : NULL;
+}
+
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */

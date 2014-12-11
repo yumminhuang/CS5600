@@ -1,0 +1,526 @@
+            +---------------------------+
+            |          CS 5600          |
+            | PROJECT 3: VIRTUAL MEMORY |
+            |       DESIGN DOCUMENT     |
+            +---------------------------+
+
+---- GROUP ----
+
+Borui Gu <borui@ccs.neu.edu>
+Nataliya Zozulya <nzozulya@ccs.neu.edu>
+Yaming Huang <yummin@ccs.neu.edu>
+
+---- PRELIMINARIES ----
+
+Extra credit: we implemented sharing of the read-only segments from common executable.
+Related data structures are described in B1; related worklow decisions are descibed in
+section B5.
+
+            PAGE TABLE MANAGEMENT
+            =====================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+1. Type of page table entry
+enum page_type {
+  STACK,        /* Page contains stack data */
+  SEGMENT,      /* Page contains program segment */
+  MMAP          /* MMAP */
+};
+
+2. Supplemental page table entry
+struct page {
+  struct hash_elem hash_elem;/* Hash table element. */
+  void *addr;                /* Virtual address. */
+  enum page_type type;       /* Page's type. */
+  bool writable;             /* Whether page is writable. */
+  bool segment_dirty;        /* Segment was written to at least once. */
+  bool swapped;              /* Is page swapped */
+  void *kaddr;               /* Kernel virtual address of the referred frame */
+  block_sector_t sector;     /* Swap address */
+  int fd;                    /* File descriptor */
+  struct file *file;         /* File that the page was mapped from */
+  int offset;                /* Offset in file */
+  uint32_t read_bytes;       /* Bytes that reads from file */
+  uint32_t zero_bytes;       /* Bytes that must be zeroed */
+  bool loaded;               /* Page loaded or not */
+};
+
+3. Swap slots
+struct block *swap;
+
+4. Bitmap represents the usage of the swap
+struct bitmap *swap_table;
+
+5. Lock used to coordinate swap
+struct lock swap_lock;
+
+6.  Frame table entry
+struct frame
+  {
+	void *k_addr;					/* Kernel virtual address mapped to frame physical address */
+	bool pinned;					/* Is data being read into the frame */
+	bool locked;					/* Frame filled for syscall*/
+	struct hash thread_to_uaddr;	/* Threads using the frame with user virtual addresses mapped to it */ 
+	struct hash_iterator ttu_i;		/* Iterator over thread_to_uaddr table */
+	struct hash_iterator ttu_i_b;	/* Iterator over thread_to_uaddr table - bits check*/
+	struct hash_elem elem;			/* Frames hash table element */
+  };
+
+7. Virtual user address mapped to its thread, used in the frame table entry
+to keep track of threads using the frame.
+struct t_to_uaddr {
+  struct thread *t;  			/* Pointer to a thread using the frame */
+  void *uaddr;       			/* User virtual address mapped to the frame in thread t */
+  struct hash_elem elem;      	/* Hash element of thread_to_uaddr */
+  };
+
+8. Frame table
+struct hash frames;        /* Frames table */
+
+9. Lock used to coordinate frame allocation, freeing
+struct lock frames_lock;    /* Frame lock */
+
+10. Add page table in struct thread
+struct thread {
+    ...
+    struct hash page_table   /* Page table of each thread */
+    ...
+}
+
+11. Constant in the swap.c that defines how many sectors are used to store one page
+int NUM = PGSIZE / BLOCK_SECTOR_SIZE;
+
+---- ALGORITHMS ----
+
+>> A2: In a few paragraphs, describe your code for locating the frame,
+>> if any, that contains the data of a given page.
+
+In supplemental page table entry, we add member 'kaddr' to represent the
+physical address of a frame. The physical address is the key in the frame
+hash table, we can use the physical address to find a frame in the frame
+table.
+
+>> A3: How does your code coordinate accessed and dirty bits between
+>> kernel and user virtual addresses that alias a single frame, or
+>> alternatively how do you avoid the issue?
+
+We avoid the issue by using exclusively user virtual addresses to address
+frames that belong to the user pool.
+
+---- SYNCHRONIZATION ----
+
+>> A4: When two user processes both need a new frame at the same time,
+>> how are races avoided?
+
+We use frames_lock to avoid races when allocating a new frame.
+frames_lock is acquired at the beginning of the allocate_frame()
+procedure:
+1. Once a free frame is chosen, and frame table and user pool state are updated
+accordingly, frame's pinned member is set to true to prevent immediate eviction
+by the other thread, frames_lock is released and kernel virtual address of
+the allocated frame is returned to the caller. 
+2. If there are no free frames left, a frame to evict is chosen, it's pinned memeber is set
+to true, current data is unloaded from the frame, frames_lock is released and kernel
+virtual address of the allocated frame is returned to the caller. 
+
+---- RATIONALE ----
+
+>> A5: Why did you choose the data structure(s) that you did for
+>> representing virtual-to-physical mappings?
+
+Hash table is efficient in insertion and search. We use hash table to
+implement page table and frame table, so it is time efficient to locate
+a page or frame and allocate a new page or frame.
+
+               PAGING TO AND FROM DISK
+               =======================
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+1. See data structures described in A1.
+
+2. To implement clock algorthm we introduced the following 3 members of the frame.h
+
+void *clock_hand;					 /* Frame the clock algorithm currently points to */
+void *ini_clock_hand;				 /* Initial position of the clock hand */
+void *max_clock_hand;				 /* Maximum position of the clock hand (maximal address of the frames in the user pool */
+
+3. Constants in the exception.h used identify whether the page fault should result in stack growth:
+/* Heuristic for stack growth */
+#define STACK_GROWTH_HEURISTIC 32
+/* Limit on stack size default to 8 MB */
+#define MAX_STACK_SIZE 0x800000
+/* Bottom of user virtual memory */
+#define USER_VADDR_BOTTOM ((void *) 0x08048000)
+
+4. To ensure execution of the free frame choice that happens if the clock algorithm could not
+find suitable frame, we introduced the following members of the frame.h 
+4.1 struct condition frames_locked;	    /* Condition to wait on for any frame to unpin\unlock */
+4.2 struct hash_iterator frames_iter;	/* Frame table iterator */	
+
+5. READ-ONLY SEGMENTS SHARING:
+
+5.1 struct hash exec_threads_table;
+A table to map the executable and a list of threads which run that executable. */
+5.2 struct lock exec_list_lock;	
+Lock to operate on shared resource exec_threads_table
+5.3 Entry of the executable to list of threads table
+struct exec_threads {
+  struct hash_elem hash_elem;   /* Hash table element */
+  char exec_name[16];           /* Executable file name */
+  struct list threads;          /* List of threads. */
+};
+5.4 struct thread {
+    ...
+    struct list_elem exec_elem;         /* List element of the executable to thread mapping. */
+    ...
+}
+
+---- ALGORITHMS ----
+
+>> B2: When a frame is required but none is free, some frame must be
+>> evicted.  Describe your code for choosing a frame to evict.
+
+We implemented the clock algorithm.
+Precondition:
+on system start-up we initialize, among others, the following members:
+1. clock hand and ini_clock_hand equal to the user pool base
+void *clock_hand = user_pool.base;
+void *ini_clock_hand = user_pool.base;
+
+2. max_clock_hand equals to the address of the end of the user pool
+void *max_clock_hand = user_pool.base + bitmap_size(user_pool.used_map) * PGSIZE;
+
+Algorithm:
+1. We set the start variable to the max_clock_hand, if clock_hand is equal to ini_clock_hand,
+and to the address of the page preceding the address of the page that clock_hand is equal to - 
+otherwise. Once, during iteration over the frame table the incremented value of the clock_hand
+is equal to start, that means we have scanned the whole frame table, did not find any frames
+to evict and have to resort to choosing any frame, without considering if it was recently accessed or not.
+
+2. We start iterating over the frame table by incrementing the clock hand by PGSIZE at each iteration.
+If at any point, clock_hand is equal to max_clock_hand, it means we reached the border of the user pool
+and have to wrap by setting clock_hand to ini_clock_hand.
+
+3. For the frame checked at current iteration (it is the frame which kernel virtual address (k_addr member)
+is equal to current value of clock_hand we check:
+3.1 If the frame was accessed recently by checking PTE_A bit of all pages referencing ths frame
+3.2 If frame was accessed we set that bit for all those pages to false
+3.3 If frame was not accessed recently, we check that (1) the frame has not just been allocated for the other thread
+and being written to/from disk or expects installation (if it is - its pinned memeber will be set to true), 
+(2) the data frame is not currently used in syscall (if it is - its locked memeber will be set to true).
+3.4 If 2 checks pass, we choose this frame for eviction and return it to the allocate_frame procedure.
+
+4. If, as a result of step 3, frame was not chosen for eviction we increment clock_hand by PGSIZE, and
+go back to step 3.
+
+5. If we scanned all the frames in the frames table (clock_hand is equal to start at step 1), we initialize the iterator
+and choose the first frame that passes the 2 checks described in 3.3 and return its kernel
+virtual address to the allocate_frame() procedure.
+
+6. If (unlikely situation) all frames are locked or pinned, the threads resorts to waiting on frames_locked condition
+variable, waiting for any process owning locked\pinned frames to signal once the state changes.
+
+>> B3: When a process P obtains a frame that was previously used by a
+>> process Q, how do you adjust the page table (and any other data
+>> structures) to reflect the frame Q no longer has?
+
+Once a frame to evict has been selected, we iterate through the list of thread to virtual user address
+mappings of this frame (which represents pages referring to that frame and has size >1 for shared frames) 
+and perform the following:
+1. We lookup the supplementary page table entry and set its loaded member to false.
+2. Before evicting data that belongs to Q we invalidate the corresponding page table entry by
+calling pagedir_clear_page() for the page directory entry of the process Q and user address from the mapping, and
+thus prevent Q from accessing and modifying it.
+3. We write the data from the frame to a file or a swap, if necessary, and set swapped memeber
+of the supplementary page table entry to true, and also provide it with the swap sector addressed,
+if the data was swapped to the swap disk.
+4. We remove thread to user address mapping (for thread Q in the current example)
+from the list of the mappings that refer to current frame.
+
+>> B4: Explain your heuristic for deciding whether a page fault for an
+>> invalid virtual address should cause the stack to be extended into
+>> the page that faulted.
+
+If we can not find a page containing the fault address in the supplemental
+page table, then we check:
+1> the fault address is between PHYS_BASE and esp - 32
+2> the stack will not grow beyond a maximum stack size of 8MB
+If both are satisfied, we extend the stack
+
+---- SYNCHRONIZATION ----
+
+>> B5: Explain the basics of your VM synchronization design.  In
+>> particular, explain how it prevents deadlock.  (Refer to the
+>> textbook for an explanation of the necessary conditions for
+>> deadlock.)
+
+We use locks, condition variables and flag members of the struct frame to
+synchronize access to the shared resources.
+
+1. Access to the swap disk shared resource is guarded by the swap_lock;
+2. Access to the exec_threads_table shared resource is guarded by the exec_list_lock;
+3. filesyslock, introduced to control access to the file system functions, is used to guard this
+access when writing from executable and to\from memory mapped files
+4. 
+4.1 pinned member of the frame is set to true, if frame has been allocated but not yet installed,
+which means it expects or in process of writing to\from file or swap sector; and registering itself
+with the frame
+4.2 locked member of the frame is set to true, if data of the frame is used in any syscall function.
+4.3 
+- Locked or pinned frames cannot be evicted.
+- On exit, shared frames that still have threads using them (i.e. they are either pinned or have
+  threads other then current in their mappings list) are not removed from the frame table and freed.
+  Instead, exiting thread removes its registration with the frame.
+- For the unlikely situation, when all frames are either pinned or locked, we introduced the condition
+variable frames_locked guarded by frames_lock, on which processes that try to evict the frame wait for
+some frame to become unpinned or unlocked; and processes that have frames pinned or locked, notify the waiting
+processes, if his condition changes for any frame.
+
+5. Critical sections that operate on such shared resources as frames, supplementary pages (in sharing) 
+and frame table are guarded by frames_lock.
+Such sections include: allocating a new frame and evicton of data from it; registering of page with the frame
+upon page installation; destruction of page and related frame; locking\unlocking of frames for system call;
+unmapping memory maped file.
+
+Deadlock avoidance:
+Although we have such deadlock conditions as mutual exclusion, no preemption and hold-and-wait, we avoid deadlock
+situation by eliminating circular wait.
+1. In the pair exec_list_lock and frames_lock, frames_lock is acquired after and released before exec_list_lock,
+if their acquirement intersects at all (it does not when process adds\removes itself to\from the exec_threads_table).
+2. In the pairs frames_lock and filesyslock; frames_lock and swap_lock; frames_lock is acquired before either
+filesyslock or swap_lock and released after, if their acquirement intersects at all, and never the other way around.
+
+SHARING - Executable to processes mapping:
+1. On loading, if load result is successful, process registers itself in the exec_threads_table, by
+adding it's thread pointer to the existing mapping of executable to list of threads or by creating a new
+mapping (if no other processes using same executable have been loaded yet) and adding itself to the
+list.
+2. On exit, process unregisters itself in the exec_threads_table, and additionally deletes the mapping and frees
+memory, if it is the only one to use its executable.
+
+LOCATING READ-ONLY SEGMENT DATA IN A SHARED FRAME:
+If we are to load a page for a user process (supplementary page table entry is present and loaded member
+is set to false), we start with the following workflow:
+1. If page is read-only (writable = false), then it is a read-only segment and we try to load it from a shared
+frame.
+2. System acquires exec_list_lock, which guards access to the shared resource: exec_threads_table hash table,
+which contains executable names mapped to the list of threads that execute them.
+3. We locate the executable of the current thread in the list and for each thread that runs it, except for the
+current thread itself. We perform the following:
+3.1 Acquire frames_lock
+3.2 Look-up faulted page in the supplementary page table and check, if it is loaded.
+3.3 If such page is not found we release frames_lock proceed to the next thread in the list and if there are no more threads
+to examine we proceed to 4.
+3.4 If such page is found, we lookup its frame, set its pinned member to true, register frame's address with the page
+and release both frames_lock and exec_list_lock.
+3.5 System tries to install the frame and in case of success registers page with the frame (by adding it to the 
+list of thread to user adress mapping of the frame; and setting its pinned member to false). Registration actions are
+guarded by frames_lock.
+3.6 In case installation and registration completed successfully, we set page's loaded member to true and its locked member
+equal to the lock parameter and return true
+4. If there are no more threads to examine we release exec_list_lock and return false.
+
+If memory we are addressing does not belong to the read-only segment or data for this segment
+is not loaded at the moment for any thread running same executable, we proceed to loading data
+from file system or swap.
+
+EVICTING SHARED FRAME:
+1. When a frame is checked by the clock algorithm that decides whether to choose it for eviction, the is_frame_accessed
+function is used to poll the corresponding page table entries of all processes, that use the frame, and if any of referring
+entries has its accessed bit set to true, frame is considered to be accessed recently.
+2. clear_page_accessed() function used by the clock algorithm to clear the accessed bit for page table entries
+is also applied to all referring page table entries.
+3. On unloading the data (for read-only segments that results in just setting loaded member to false) operation is applied
+to all  all referring supplementary page table entries.
+
+EXIT - Freeing a shared frame:
+1. On exit, if the process by checking pinned member of the frame and the remaining size of the referring supplementary
+page table entries (after deleting it's own page from the list) identifies that it is not the only one, using the frame,
+it does not remove the frame from the frame table and does not free it.
+ 
+>> B6: A page fault in process P can cause another process Q's frame
+>> to be evicted.  How do you ensure that Q cannot access or modify
+>> the page during the eviction process?  How do you avoid a race
+>> between P evicting Q's frame and Q faulting the page back in?
+
+1. We invalidate the corresponding page table entry of the Q and set
+loaded member of the corresponding supplementary page table entry to false.
+At this point any Q's attempts to access and modify the page will
+result in page fault.
+2. As allocaton of new frames is guarded by frames_lock Q won't be able to allocate
+a frame for the faulted page until P is finished eviction and data unloading from it.
+Also because of clock algorithm used for chooosing a frame to allocate, the
+probability that the recently evicted frame will be chosen by Q is extremely low:
+- if P had not time to load data into frame and consecutively install the page
+the pinned member of the corresponding frame will be set to true, and frame will
+be skipped by frame selection algorithm
+- if P had time to access data in the allocated frame, we'll skip the frame as the
+PTE_A flag P's page referencing this frame will be set to true.
+
+>> B7: Suppose a page fault in process P causes a page to be read from
+>> the file system or swap.  How do you ensure that a second process Q
+>> cannot interfere by e.g. attempting to evict the frame while it is
+>> still being read in?
+
+1. The pinned member of the frame that is allocated to process P is set to true
+(this happens with P having the frames_lock), thereafter the frames_lock is released,
+and P proceeds with reading data, installing a page. The pinned member is set back to false 
+only after data is read into the frame from file system or swap and page is registered with
+the frame - which happens int the guarded section that registers page with the frame.
+
+2. To allocate a frame Q needs to acquire frames_lock, thus we can have no race conditons here.
+And if the frame's pinned member is set to true Q is not allowed to allocate such frame and
+it skips it during frame to evict selection process.
+
+>> B8: Explain how you handle access to paged-out pages that occur
+>> during system calls.  Do you use page faults to bring in pages (as
+>> in user programs), or do you have a mechanism for "locking" frames
+>> into physical memory, or do you use some other design?  How do you
+>> gracefully handle attempted accesses to invalid virtual addresses?
+
+We use the "locking" mechanism in the following way
+1. We validate user virtual addresses that are passed to the system call,
+loading data into frames or growing stack, if necessary, and set the locked member
+of the loaded frame to true.
+Such frames are skipped by frame eviction algorithm.
+1.1 If  supplementary page table state and stack growth heuristic show that user 
+process tries to make invalid access, it is made to exit with -1 status code.
+2. After execution of the system call is finished, we set the locked member of
+the frames used back to false.
+
+---- RATIONALE ----
+
+>> B9: A single lock for the whole VM system would make
+>> synchronization easy, but limit parallelism.  On the other hand,
+>> using many locks complicates synchronization and raises the
+>> possibility for deadlock but allows for high parallelism.  Explain
+>> where your design falls along this continuum and why you chose to
+>> design it this way.
+
+We chose the middle ground by synchronizing on the frames_lock lock for
+a part of VM workflows, and using frame's pinned and locked members and
+swap_lock and filesyslock for the other part.
+The reason for this is to not make synchronization overcomplicated, but
+still gain on performance, in situations where enforcing serial execution
+of all threads can be avoided.
+
+1. We use frames_lock to synchronize the following critical sections:
+1) frame allocation and data unload process from the frame that is evicted
+(file system or swap usage within this flow is guarded by filesyslock and
+swap_lock respectively), which also results in pinning the frame;
+2) registering page with the frame, which also results in unpinning the frame; 
+3) frame\page freeing on exit process.
+4) shared frame allocation, which also results in pinning the frame.
+
+2. The loading of data into the frame (swap state update, if necessary)
+is guarded by either swap_lock or filesyslock, depending on where data is taken from.
+To prevent eviction of frame in the process of loading we use the pinned
+member of the frame (setting it to true on allocation and to false on registering page
+with the frame after installation) to control access to a single frame by other threads, 
+which might be seen as analogy of micro per-frame lock.
+NOTE. In case if unmapping a memory mapped file requires writing back to the file system,
+we set the pinned member to true before we start writing back and set it to false, after writing
+is done.
+
+3. Same strategy is used to prevent eviction of frames which data is used in syscalls,
+their locked member is set to true, to prevent eviction by other threads.
+
+4. Locating a process, that uses same executable is guarded by exec_list_lock.
+
+             MEMORY MAPPED FILES
+             ===================
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+1. Added two members in threads/thread.h
+1) mapid_cnt is used to determine the mapping ID for next mmap
+2) mapids is a hash table for tracking thread's mmaps.
+
+struct thread
+  {
+    ...
+
+    struct hash mapids;         /* Hash table for tracking thread's mapids */
+    unsigned short mapid_cnt;   /* "Sequence" for mapids */
+
+    ...
+  };
+
+2. Each entry in the table is a struct mapping.
+This struct is used to keep track of one mmap. It has 4 members:
+1) mapid: the mapping ID
+2) addr: address of first virtual page in the mmap region
+3) pnum: numer of virtual pages assigned to the mmap
+4) elem: the hash table element
+
+struct mapping {
+  int mapid;                  /* Mapping id */
+  void *addr;                 /* Virtual address of first page */
+  int pnum;                   /* Number of virtual pages */
+  struct hash_elem elem;      /* Hash table element */
+};
+
+
+3. Members of syscall.h for kernel usage
+ typedef int mapid_t; 				/* Map region identifier. */
+ #define MAP_FAILED ((mapid_t) -1) 	/* Failure status code of mmap operation */
+
+5. Data structures about page are mentioned in A1.
+
+---- ALGORITHMS ----
+
+>> C2: Describe how memory mapped files integrate into your virtual
+>> memory subsystem.  Explain how the page fault and eviction
+>> processes differ between swap pages and other pages.
+
+We add a page type MMAP to indicate a page is in mmap region, and
+use a hash table to keep track of mmaps of a thread. When page fault
+occurs on a page of type MMAP, we read the file and load it to physical
+memory, similar to a page fault on a page of type SEGMENT, in which we
+read the executable and load it to physical memory.
+On eviction or munmap, the difference is that mmap-ed dirty pages
+should be written back to the file that this page was mapped from.
+On exit, we munmap all mmaps.
+
+>> C3: Explain how you determine whether a new file mapping overlaps
+>> any existing segment.
+
+First, we use filesize to get the length of the file. Now we can
+calculate how many pages do we need in the mapping. Then start from
+the page at the given address, we check the supplemental page table.
+If any of the pages needed already had an entry in supplemental page
+table, then the new mapping overlaps an existing segment, call to
+mmap will fail.
+
+---- RATIONALE ----
+
+>> C4: Mappings created with "mmap" have similar semantics to those of
+>> data demand-paged from executables, except that "mmap" mappings are
+>> written back to their original files, not to swap.  This implies
+>> that much of their implementation can be shared.  Explain why your
+>> implementation either does or does not share much of the code for
+>> the two situations.
+
+We share code when a page fault occurs and needs to read executable or
+read the file that the page was mapped from, since in both situations
+we are loading contents of a file to physical memory.
+We does not share code when we evict a page, since for mmap we write to
+the original file, not to swap.
+
+               SURVEY QUESTIONS
+               ================
+N/A
