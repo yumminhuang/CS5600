@@ -105,11 +105,11 @@ bool
 load_page (struct page *p, bool lock)
 {
   void *kaddr = NULL;
-
+  	
   if (!p->writable && try_loading_shared (p, lock)) {
-  return true;
-  }
-
+	return true;
+  }	
+  
   enum palloc_flags flags = PAL_ZERO;
   kaddr = allocate_frame (flags, lock);
 
@@ -196,10 +196,8 @@ load_page_from_file (uint8_t *kaddr, struct file *file, off_t ofs,
 {
   ASSERT ((page_read_bytes + page_zero_bytes) % PGSIZE == 0);
 
-  lock_acquire(&filesyslock);
   file_seek (file, ofs);
   int f_read_bytes = file_read (file, kaddr, page_read_bytes);
-  lock_release(&filesyslock);
 
   if (f_read_bytes != (int) page_read_bytes)
   {
@@ -222,21 +220,19 @@ release_mmap_page (struct page *p) {
   bool dirty = is_frame_dirty (f);
 
   if (!dirty) {
-  lock_acquire(&frames_lock);
+	lock_acquire(&frames_lock);
     free_frame (p, true);
-  lock_release(&frames_lock);
+	lock_release(&frames_lock);
     return;
   }
-
+  
   /* Pin the frame */
   lock_acquire(&frames_lock);
   f->pinned = true;
   lock_release(&frames_lock);
 
-  lock_acquire (&filesyslock);
   uint32_t f_write_bytes = file_write_at (p->file, kaddr, p->read_bytes, p->offset);
   ASSERT (f_write_bytes == p->read_bytes);
-  lock_release (&filesyslock);
 
   /* Writing done, unpin the frame */
   lock_acquire(&frames_lock);
@@ -257,10 +253,9 @@ evict_mmap_page (struct page *p) {
   if (!dirty)
     return;
 
-  lock_acquire (&filesyslock);
   uint32_t f_write_bytes = file_write_at (p->file, kaddr, p->read_bytes, p->offset);
   ASSERT (f_write_bytes == p->read_bytes);
-  lock_release (&filesyslock);
+
 }
 
 
@@ -287,7 +282,7 @@ page_destructor (struct hash_elem *p_, void *aux UNUSED)
             free (p);
         }
         break;
-    }
+		}
       case STACK: {
         if (!p->swapped) {
             free_frame (p, false);
@@ -299,10 +294,10 @@ page_destructor (struct hash_elem *p_, void *aux UNUSED)
         }
 
         break;
-    }
+		}
       default: NOT_REACHED ();
     }
-  lock_release(&frames_lock);
+	lock_release(&frames_lock);
 }
 
 /* Swap a page from frame to swap slots */
@@ -329,7 +324,7 @@ exec_threads_hash (const struct hash_elem *e_, void *aux UNUSED)
 {
   struct exec_threads *e = hash_entry (e_, struct exec_threads,
                                              hash_elem);
-  return hash_string (e->exec_name);
+  return (unsigned) e->inumber; 
 }
 
 /* Returns true if exec_threads a precedes exec_threads b. */
@@ -341,18 +336,18 @@ exec_threads_less (const struct hash_elem *a_, const struct hash_elem *b_,
                                              hash_elem);
   const struct exec_threads *b = hash_entry (b_, struct exec_threads,
                                              hash_elem);
-  return hash_string (a->exec_name) <  hash_string (b->exec_name);
+  return a->inumber <  b->inumber;
 }
 
 /* Returns the exec_threads entry containing the given executable file,
    or a null pointer if no such executable file exists. */
 struct
-exec_threads * exec_threads_lookup (char *exec_name)
+exec_threads * exec_threads_lookup (block_sector_t inumber)
 {
   struct exec_threads et;
   struct hash_elem *e;
 
-  strlcpy (et.exec_name, exec_name, sizeof (et.exec_name));
+  et.inumber = inumber;
   e = hash_find (&exec_threads_table, &et.hash_elem);
   return e != NULL ? hash_entry (e, struct exec_threads, hash_elem) : NULL;
 }
@@ -361,15 +356,16 @@ exec_threads * exec_threads_lookup (char *exec_name)
  * Otherwise, insert a new entry for exec.
  */
 void
-add_exec_threads_entry(struct thread *t)
+add_exec_threads_entry(struct thread *t, struct file *file)
 {
-  struct exec_threads *et = exec_threads_lookup(t->name);
+  block_sector_t inumber = inode_get_inumber (file_get_inode (file));
+  struct exec_threads *et = exec_threads_lookup(inumber);
 
   if (et) {
     list_push_back (&et->threads, &t->exec_elem);
   } else {
     struct exec_threads *et = malloc(sizeof (struct exec_threads));
-    strlcpy (et->exec_name, t->name, sizeof (et->exec_name));
+    et->inumber = inumber;
     list_init(&et->threads);
     list_push_back (&et->threads, &t->exec_elem);
     hash_insert (&exec_threads_table, &et->hash_elem);
@@ -382,7 +378,9 @@ void
 remove_exec_threads_entry (struct thread *t)
 {
   struct list_elem *e;
-  struct exec_threads *et = exec_threads_lookup (t->name);
+  ASSERT (t->exec != NULL);
+  block_sector_t inumber = inode_get_inumber (file_get_inode (t->exec));
+  struct exec_threads *et = exec_threads_lookup (inumber);
 
   if (et) {
     if (list_size (&et->threads) == 1) {
@@ -390,8 +388,8 @@ remove_exec_threads_entry (struct thread *t)
        * exec_threads_table
        */
       hash_delete(&exec_threads_table, &et->hash_elem);
-    free (et);
-  }
+	  free (et);
+	}
     else {
       /* Remove the thread from threads list */
       for (e = list_begin (&et->threads);
@@ -412,42 +410,45 @@ remove_exec_threads_entry (struct thread *t)
    read-only segment page. Installs page, updates supplementary page table
    and frame and returns true, if such frame is found, returns false - otherwise. */
 static bool try_loading_shared (struct page *p, bool lock) {
-
+	
   lock_acquire(&exec_list_lock);
 
-  struct exec_threads *et = exec_threads_lookup (thread_current()->name);
+  struct thread *t = thread_current();
+  ASSERT (t->exec != NULL);
+  block_sector_t inumber = inode_get_inumber (file_get_inode (t->exec));
+  struct exec_threads *et = exec_threads_lookup (inumber);
   if (et) {
-    struct list_elem *e = list_begin(&et->threads);
-    while (e != list_end (&et->threads)) {
-      struct thread *t = list_entry (e, struct thread, exec_elem);
-
-      /* Check page of related thread t */
-      if (t == thread_current()) {
-        e = list_next(e);
-        continue;
-      }
-
-      lock_acquire(&frames_lock);
-      struct page *same_p = page_lookup(p->addr, t);
-      if (same_p->loaded) {
-        struct frame *f = frame_lookup (same_p->kaddr);
-        f->pinned = true;
-        p->kaddr = f->k_addr;
-        lock_release(&frames_lock);
-        lock_release(&exec_list_lock);
-        if (!install_page (p->addr, f->k_addr, p->writable)){
-           free_uninstalled_frame (f->k_addr);
-           return false;
-        }
-        p->loaded = true;
-        f->locked = lock;
-        return true;
-      }
-      lock_release(&frames_lock);
-      e = list_next(e);
-    }
+	  struct list_elem *e = list_begin(&et->threads);
+	  while (e != list_end (&et->threads)) {
+		  struct thread *t = list_entry (e, struct thread, exec_elem);
+		  
+		  /* Check page of related thread t */
+		  if (t == thread_current()) {
+			  e = list_next(e);
+			  continue; 
+		  }
+		  
+		  lock_acquire(&frames_lock);
+		  struct page *same_p = page_lookup(p->addr, t);
+		  if (same_p->loaded) {
+			  struct frame *f = frame_lookup (same_p->kaddr);
+			  f->pinned = true;
+			  p->kaddr = f->k_addr;
+			  lock_release(&frames_lock);
+			  lock_release(&exec_list_lock);
+			  if (!install_page (p->addr, f->k_addr, p->writable)){
+				   free_uninstalled_frame (f->k_addr);
+				   return false;
+			  }
+			  p->loaded = true;
+			  f->locked = lock;
+			  return true;
+		  }
+		  lock_release(&frames_lock);
+		  e = list_next(e);
+	  }			
   }
-
+  
   lock_release(&exec_list_lock);
   return false;
 }

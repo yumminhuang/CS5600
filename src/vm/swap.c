@@ -20,6 +20,9 @@ void
 init_swap(void)
 {
   swap = block_get_role(BLOCK_SWAP);
+  if (swap == NULL) {
+	  return;
+  }
   // Number of sectors in BLOCK_SWAP
   int size = block_size(swap);
   swap_table = bitmap_create(size / NUM);
@@ -33,7 +36,6 @@ set_swap(void * addr)
   lock_acquire(&swap_lock);
   // Find a free sector in the swap table
   block_sector_t sector = bitmap_scan (swap_table, 0, 1, false);
-  //printf("Found sector %d to write page %p", sector, addr);
   if(sector == BITMAP_ERROR)
     PANIC("Swap table is full.");
 

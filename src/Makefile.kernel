@@ -7,14 +7,14 @@ include Make.vars
 DIRS = $(sort $(addprefix build/,$(KERNEL_SUBDIRS) $(TEST_SUBDIRS) lib/user))
 
 all grade check: $(DIRS) build/Makefile
-    cd build && $(MAKE) $@
+	cd build && $(MAKE) $@
 $(DIRS):
-    mkdir -p $@
+	mkdir -p $@
 build/Makefile: ../Makefile.build
-    cp $< $@
+	cp $< $@
 
 build/%: $(DIRS) build/Makefile
-    cd build && $(MAKE) $*
+	cd build && $(MAKE) $*
 
 clean:
-    rm -rf build
+	rm -rf build

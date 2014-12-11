@@ -17,6 +17,9 @@
 #include "userprog/syscall.h"
 #endif
 #include "vm/page.h"
+#include "devices/timer.h"
+#include "filesys/cache.h"
+#include "filesys/directory.h"
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -30,6 +33,10 @@ static struct list ready_list;
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
+
+/* List of processes in THREAD_SLEEP state, that is, processes
+/   that are put to sleep. */
+static struct list sleep_list;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -85,6 +92,9 @@ unsigned mapid_hash_func (const struct hash_elem *e, void *aux);
 bool mapid_hash_less_func (const struct hash_elem *a,
              const struct hash_elem *b,
              void *aux);
+static void threads_wake (void);
+static bool thread_alarm_sorter (const struct list_elem *a,
+const struct list_elem *b, void *aux UNUSED);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -106,6 +116,7 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
+  list_init (&sleep_list);
   list_init (&all_list);
 
   /* Set up a thread structure for the running thread. */
@@ -113,6 +124,10 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  /* Initialize work directory to root. Call dir_open_root at
+     this point will cause error. We interpret NULL in cwd as
+	 current work directory is root */
+  initial_thread->cwd = NULL;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -128,6 +143,7 @@ thread_start (void)
   sema_init (&idle_started, 0);
 
   thread_create ("idle", PRI_MIN, idle, &idle_started);
+  thread_create ("cache-2-disk", PRI_DEFAULT, write_all_cache_thread, NULL);
 
   /* Start preemptive thread scheduling. */
   intr_enable ();
@@ -209,15 +225,23 @@ thread_create (const char *name, int priority,
     struct childtracker ct_q;
     ct_q.child_id = TID_ERROR;
     struct hash_elem *ect = hash_delete(&t->parent->children, &ct_q.elem);
-    struct childtracker *ct  = hash_entry(ect, struct childtracker, elem);
-    ct->child_id = tid;
-    ct->child = thread_current();
-    hash_insert(&t->parent->children, &ct->elem);
-    hash_init(&t->children, ct_hash_func, ct_hash_less_func, NULL);
-    hash_init(&t->fds, fds_hash_func, fds_hash_less_func, &filesyslock);
-	hash_init(&t->mapids, mapid_hash_func, mapid_hash_less_func, NULL);
-    t->fd_cnt = 1;
-	t->mapid_cnt = 1;
+	if (ect != NULL) {
+		struct childtracker *ct  = hash_entry(ect, struct childtracker, elem);
+		ct->child_id = tid;
+		ct->child = thread_current();
+		hash_insert(&t->parent->children, &ct->elem);
+		hash_init(&t->children, ct_hash_func, ct_hash_less_func, NULL);
+		hash_init(&t->fds, fds_hash_func, fds_hash_less_func, NULL);
+		hash_init(&t->mapids, mapid_hash_func, mapid_hash_less_func, NULL);
+		t->fd_cnt = 1;
+		t->mapid_cnt = 1;
+		/* Inherit parent's work directory */
+		if (t->parent->cwd != NULL) {
+			t->cwd = dir_reopen(t->parent->cwd);
+		} else {
+			t->cwd = NULL;
+		}
+	}
   }
 
   /* Initialize supplemental page table */
@@ -530,10 +554,69 @@ alloc_frame (struct thread *t, size_t size)
 static struct thread *
 next_thread_to_run (void)
 {
+  threads_wake();
   if (list_empty (&ready_list))
     return idle_thread;
   else
     return list_entry (list_pop_front (&ready_list), struct thread, elem);
+}
+
+/* Goes through the sleep_list and wakes threads, by changing their
+   status and moving from sleep_list to ready_list if current tick
+   is more than or equal to alarm value of a sleeping thread. */
+
+static void threads_wake(void) {
+	int64_t cur_ticks = timer_ticks();
+	struct list_elem *temp, *e;
+	e = list_begin (&sleep_list);
+
+	while (e != list_end (&sleep_list)) {
+		struct thread *t = list_entry (e, struct thread, elem);
+
+		if (t->alarm <= cur_ticks) {
+			t->status = THREAD_READY;
+			temp = e;
+			e = list_next (e);
+			list_remove(temp);
+			list_push_back(&ready_list, &t->elem);
+			}
+		else {
+			break;
+		}
+	}
+	return;
+}
+
+/* Puts current thread to sleep by setting its status
+   to THREAD_SLEEPING and alarm to ALARM time.
+   Adds it to the list of sleeping threads (sorted by
+   alarm value, ascending), and schedules a new thread to run. */
+void
+thread_sleep (int64_t alarm)
+{
+  struct thread *cur = thread_current ();
+
+  enum intr_level old_level;
+  old_level = intr_disable ();
+
+  if (cur != idle_thread) {
+	  cur->status = THREAD_SLEEPING;
+	  cur->alarm = alarm;
+	  list_insert_ordered(&sleep_list, &cur->elem, thread_alarm_sorter, NULL);
+	  schedule ();
+  }
+
+  intr_set_level (old_level);
+}
+
+/* Returns true if alarm value of the tread in list element a_ is less
+   than alarm value of the tread in list element b_. */
+static bool
+thread_alarm_sorter (const struct list_elem *a_, const struct list_elem *b_,
+void *aux UNUSED) {
+	struct thread *ta = list_entry (a_, struct thread, elem);
+	struct thread *tb = list_entry (b_, struct thread, elem);
+	return ta->alarm < tb->alarm;
 }
 
 /* Completes a thread switch by activating the new thread's page

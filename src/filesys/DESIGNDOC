@@ -1,0 +1,559 @@
+             +-------------------------+
+             |         CS 5600         |
+             | PROJECT 4: FILE SYSTEMS |
+             |     DESIGN DOCUMENT     |
+             +-------------------------+
+
+---- GROUP ----
+
+Nataliya Zozulya <nzozulya@ccs.neu.edu>
+Borui Gu <borui@ccs.neu.edu>
+Yaming Huang <yummin@ccs.neu.edu>
+
+---- PRELIMINARIES ----
+
+Extra credit: We implemented file system based on Project 3 (VM) - compile and run with VM enabled.
+
+             INDEXED AND EXTENSIBLE FILES
+             ============================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+In inode.c
+Modify struct inode_disk
+struct inode_disk
+  {
+    off_t length;                          /* File size in bytes. */
+    unsigned magic;                        /* Magic number. */
+    uint32_t direct_index;                 /* Direct block pointer index */
+    uint32_t indirect_index;               /* Indirect pointer index */
+    uint32_t doubly_indirect_index;        /* Doubly indirect pointer index */
+    block_sector_t ptr[INODE_BLOCK_PTRS];  /* Pointers to blocks */
+    uint32_t unused[109];                  /* Not used. */
+  };
+
+Indirect_block which is used for indirect and doubly indirect block.
+struct indirect_block
+  {
+    block_sector_t ptr[INDIRECT_BLOCK_PTRS];  /* Pointers to blocks */
+  };
+
+Modify struct inode
+struct inode
+  {
+    struct list_elem elem;              /* Element in inode list. */
+    block_sector_t sector;              /* Sector number of disk location. */
+    int open_cnt;                       /* Number of openers. */
+    bool removed;                       /* True if deleted, false otherwise. */
+    int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
+    struct lock lock;                   /* Lock */
+  };
+
+#define DIRECT_BLOCKS 12                /* How many direct blocks. */
+#define INDIRECT_BLOCKS 1               /* How many singly indirect block. */
+#define DOUBLY_INDIRECT_BLOCKS 1        /* How many doubly indirect block. */
+
+/* Index of blocks in blocks array */
+#define DIRECT_INDEX 0
+#define INDIRECT_INDEX DIRECT_BLOCKS
+#define DOUBLY_INDIRECT_INDEX DIRECT_BLOCKS + INDIRECT_BLOCKS
+
+/* The number of pointer-blocks in inode */
+#define INODE_BLOCK_PTRS DOUBLY_INDIRECT_INDEX + DOUBLY_INDIRECT_BLOCKS
+/* The number of sector pointers in a indirect block */
+#define INDIRECT_BLOCK_PTRS 128
+
+>> A2: What is the maximum size of a file supported by your inode
+>> structure?  Show your work.
+
+A block has 512 bytes. An indirect block contains 128 pointers to other
+blocks. Each inode has 12 direct blocks, 1 singly indirect block and 1
+doubly indirect blocks. Therefore, maximum file size is
+512 * 12 + 128 * 512 * 1 + 128 * 128 * 512 * 1 = 8460288 Bytes.
+
+---- SYNCHRONIZATION ----
+
+>> A3: Explain how your code avoids a race if two processes attempt to
+>> extend a file at the same time.
+
+Add lock in the inode structure. Every process has to accquire this lock
+before it try to extend a file and release the lock after it complete
+extending a file.
+
+>> A4: Suppose processes A and B both have file F open, both
+>> positioned at end-of-file.  If A reads and B writes F at the same
+>> time, A may read all, part, or none of what B writes.  However, A
+>> may not read data other than what B writes, e.g. if B writes
+>> nonzero data, A is not allowed to see all zeros.  Explain how your
+>> code avoids this race.
+
+In function inode_write_at(), in case writing process grows the file by
+its operation, the length of a inode will not be updated until the process
+finishes writing. Hence, if A tries to read at the end of
+file while B is writing there, A will not see the changes until B is done.
+
+>> A5: Explain how your synchronization design provides "fairness".
+>> File access is "fair" if readers cannot indefinitely block writers
+>> or vice versa.  That is, many processes reading from a file cannot
+>> prevent forever another process from writing the file, and many
+>> processes writing to a file cannot prevent another process forever
+>> from reading the file.
+
+In our file system, readers can never block writers. 
+Writers do not block
+1) readers, unless the writing is done past the end of file (file growing)
+In this case reader will be able to read the data, only writing past
+end of file is finished (as described in A4)
+2) other writers, unless both competing processes are writing past the end of file
+Growing the file and writing past its end is an atomic operation guarded by the
+lock of the corresponding inode.
+
+---- RATIONALE ----
+
+>> A6: Is your inode structure a multilevel index?  If so, why did you
+>> choose this particular combination of direct, indirect, and doubly
+>> indirect blocks?  If not, why did you choose an alternative inode
+>> structure, and what advantages and disadvantages does your
+>> structure have, compared to a multilevel index?
+
+Our inode structure is a three-level index. Since our system has to support
+8MB file, we have to implement doubly indirect blocks. However, in order to
+reduce the complexity, we only use one singly indirect block and one doubly
+indirect block.
+
+          SUBDIRECTORIES
+          ==============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+1. In filesys/directory.c:
+/* A single directory entry. */
+struct dir_entry
+  {
+    block_sector_t inode_sector;        /* Sector number of header. */
+    char name[NAME_MAX + 1];            /* Null terminated file name. */
+    bool in_use;                        /* In use or free? */
+    bool isdir;                         /* Is directory? */
+  };
+Added a new member "isdir" to indicate whether the entry is a directory
+
+2. In threads/thread.h:
+struct thread
+  {
+    ...
+    struct dir *cwd;                    /* Pointer to current working dir */
+    ...
+  };
+Added a new member "cwd" which points to current working directory of the thread
+
+struct fd_to_file {
+  int fd;                     /* File descriptor id. */
+  struct file *file_ptr;      /* Pointer to the opened file. */
+  struct dir *dir_ptr;        /* Pointer to the opened directory */
+  bool isdir;                 /* is directory? */
+  struct hash_elem elem;      /* Hash table element. */
+};
+Added two members "dir_ptr" and "isdir", so system call OPEN can open directories:
+If isdir is false, file_ptr will point to the opened file, dir_ptr will be NULL
+If isdir is true, file_ptr will be NULL, dir_ptr will point to the opened directory
+
+3. In userprog/syscall.h:
+
+/* Maximum characters in a filename written by readdir(). */
+#define READDIR_MAX_LEN 14
+
+4. Constant in directory.h, used for adding directory entries
+
+/* Size of a single dir entry */
+#define DIR_ENTRY 24
+
+
+---- ALGORITHMS ----
+
+>> B2: Describe your code for traversing a user-specified path.  How
+>> do traversals of absolute and relative paths differ?
+
+During system call MKDIR, two directory entries "." and ".." are added to the
+created directory. "." points to the directory itself, ".." points to its parent
+directory.
+
+When traversing a user-specified path, we check the first character in the path.
+If the first character is "/", we set the root directory as the initial tracked
+directory (absolute path). Otherwise we set the thread's current working directory
+as the initial tracked directory (relative path). We extract tokens from the
+user-specified path (use "/" as separator character).
+
+We iterate over the tokens (except for the last one), use token as the name to
+lookup in the tracked directory. If the name exists and that directory entry is a
+directory, it becomes the tracked directory. Otherwise the path is invalid.
+
+When this process finishes, the current tracked directory and the last token are
+returned as the directory and name to work with.
+
+---- SYNCHRONIZATION ----
+
+>> B4: How do you prevent races on directory entries?  For example,
+>> only one of two simultaneous attempts to remove a single file
+>> should succeed, as should only one of two simultaneous attempts to
+>> create a file with the same name, and so on.
+
+We use the lock in directory's inode to prevent races in dir_lookup(), dir_add() and dir_remove().
+
+>> B5: Does your implementation allow a directory to be removed if it
+>> is open by a process or if it is in use as a process's current
+>> working directory?  If so, what happens to that process's future
+>> file system operations?  If not, how do you prevent it?
+
+We do not allow a directory to be removed under these situations. We prevent it by
+checking the open count of directory's inode. If the open count is greater than
+one, the directory can't be removed (to check the open count we need to open the
+directory, thus the open count should be at least one).
+
+---- RATIONALE ----
+
+>> B6: Explain why you chose to represent the current directory of a
+>> process the way you did.
+
+We represent the current directory as a struct dir* in struct thread.
+
+Since common operations on current directory are:
+#1 system call CHDIR, which needs to close current directory, open a directory,
+and set it to current directory
+#2 system call EXEC, child process inherits parent's current directory
+#3 when traversing a relative path, set thread's current working directory as the
+initial tracked directory
+
+Representing current directory in this way, we can use directory level methods to
+easily manipulate the current directory. For #1, we can use dir_close() and
+dir_open(). For #2 and #3, we can use dir_reopen().
+
+           BUFFER CACHE
+           ============
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+GENERAL CACHE:
+
+1. struct hash buffer_cache;
+Hash table of cache contents in a form of cache entries with meta-data
+1.1 Start address of memory allocated for buffer cache, used for
+max clock hand and new entry cache address calculation.
+void *cache_base;
+
+2.
+/* Entry in the buffer cache */
+ struct cache_entry {
+	 block_sector_t sector;			/* Sector id, which data stored in cache */
+	 void *cache_addr;				/* Kernel virtual address at which data is stored */
+	 bool dirty;					/* Has cache data been written to? */
+	 bool accessed;					/* Has cache data been accessed? */
+	 unsigned pin_count;			/* Is cached data actively in use? */
+	 struct hash_elem h_elem;		/* buffer_cache hash element */
+	 struct hash_elem ev_h_elem;	/* ev_buffer_cache hash element */
+ };
+
+3. Lock guarding operations on cache:
+struct lock cache_lock;
+
+4. Condition for waiting on cache entries to become unpinned (guarded by cache_lock)
+struct condition pinned_cond;
+
+5. Bitmap to keep track of free\used space in the cache
+struct bitmap *cache_map;
+
+6. Lock guarding operations on cache map
+struct lock cache_map_lock;
+
+7. Size of buffer cache in blocks, used to create cache bitmap
+#define CACHE_SIZE_B 64
+
+8. Size of buffer cache in pages, used to allocate memory for cache
+#define CACHE_SIZE_PG (BLOCK_SECTOR_SIZE * CACHE_SIZE_B) / PGSIZE
+
+9. Eviction algorithm
+ 9.1 struct hash ev_buffer_cache;
+ Hash table that uses cache kernel virtual address as entry "index",
+ contains the same cache entries as buffer_cache, used it for in
+ order address-wise iteration of clock algorithm
+
+ 9.2 Current value of clock hand for cache eviction
+ void *bc_clock_h;
+ 9.3 Min value of clock hand for cache eviction
+ void *bc_ini_clock_h;
+ 9.4 Max value of clock hand for cache eviction
+ void *bc_max_clock_h;
+
+WRITE-BEHIND FUNCTIONALITY:
+1. Sleep time in ticks for write-behind thread
+#define WRITE_ALL_SLEEP_AC 15
+
+2. Sleep time for write-behind thread that does not write behind yet, but waits
+for cache infrastructure to launch
+#define WRITE_ALL_SLEEP_INAC 50
+
+3. Cache iterator, used to iterate over all cache entries sequentially and write all dirty entries to disk
+struct hash_iterator cache_iter;
+
+4. bool cache_finish;
+True is cache infrastructure is shutting down; used to stop write-behind and read-ahead threads execution
+5. bool cache_start;
+True is cache infrastructure is created; used to start write-behind thread active execution
+
+READ-AHEAD FUNCTIONALITY:
+1. Number of threads in a read-ahead pool
+#define READ_AHEAD_POOL 30
+
+2.  struct list read_ahead_queue;
+List of read-ahead tasks (sectors that should be read ahead asynchronously)
+
+3. Read-ahead task
+ struct read_ahead_entry {
+   block_sector_t sector_idx;   /* Sector id to be read by read-ahead thread */
+   struct list_elem elem;     /* read_ahead_queue list element */
+   };
+
+4. Condition variable, on which read-ahead threads wait for tasks to be added to read_ahead_queue
+and a pointer to it
+ struct condition *read_ahead_av_ptr
+ struct condition read_ahead_av;
+
+5. Lock that guards operation on read_ahead_queue and read_ahead_av condition variable
+and a pointer to it
+ struct lock read_ahead_lock;
+ struct lock *read_ahead_lock_ptr;
+
+
+---- ALGORITHMS ----
+
+>> C2: Describe how your cache replacement algorithm chooses a cache
+>> block to evict.
+
+We use the clock algorithm to choose a cache entry for eviction in the following way:
+INITIALIZATION:
+1. Every cache_entry is a member of 2 hash tables: buffer_cache and ev_buffer_cache.
+The latter is indexed by cache_addr and is used for choosing entry to evict.
+2. bc_ini_clock_h and bc_clock_h are initialized to kernel virtual address of the
+first cache entry
+bc_max_clock_h is initialized to point at the kernel virtual address of the last cache entry
+
+Note. The whole eviction process is guarded by cache_lock lock.
+
+ALGORITHM:
+Eviction is implemented in the choose_cache_entry procedure:
+0. We initialize 2 cache entry pointers for backup workflow starting at paragraph 5:
+struct cache_entry *ce_fst_clrd = NULL;
+struct cache_entry *ce_fst_clrd_dirty = NULL;
+
+1. The borderline position of the clock hand - variable start - is initially set to the
+previous before last value of bc_clock_h. That is to bc_max_clock_h if last value was
+bc_ini_clock_h or bc_clock_h - BLOCK_SECTOR_SIZE - otherwise.
+If at any point during iteration the incremented bc_clock_h becomes equal to bc_max_clock_h,
+we reset its value to bc_ini_clock_h;
+If at some point the incremented bc_clock_h becomes equal to start, that means that a full
+circle over cache entries was made and no good candidate for eviction was found, and we to
+backup flow starting at paragraph 5.
+2. We use bc_clock_h to retrieve cache_entry entities in order of their position in memory
+3. If accessed member of the retrieved entry is set to true algorithm:
+3.1 Sets accessed member to false
+3.2 Check the pin_count of the entry, and if it is greater than zero, we increment bc_clock_h and
+proceed with interation; if it is equal to zero (no thread is currently writing
+to or reading from the memory that this entry coresponds to), we check the dirty member of the entry.
+3.4 If dirty member is set to false and we have not assigned anything to ce_fst_clrd, we assign
+it to point at current cache entry, that is ce_fst_clrd - is 1st observed entry, that was accessed, but
+not pinned and not dirty.
+3.5 If dirty member is set to true and we have not assigned anything to ce_fst_clrd_dirty, we assign
+it to point at current cache entry, that is ce_fst_clrd_dirty - is 1st observed entry, that was accessed
+and dirty, but not pinned.
+3.6 Algorithm proceeds with iteration
+4. If accessed member of the retrieved entry is set to false algorithm:
+4.1 If pin_count member is greater than 0 (entry is used by thread to write to or to read from)
+and then algorithm proceed with iteration
+4.2 Otherwise, algorithm check the dirty member, if it is set to true, algorithm writes memory, cache
+entry references to disk, deletes entry from both buffer_cache and ev_buffer_cache and returns pointer
+to the entry to the caller;
+
+5. If the full circle over the entries was made and no not recently accessed and unpinned entry was found,
+and if neither ce_fst_clrd or ce_fst_clrd_dirty was assigned during iteration, which means all entries appear
+to be actively used (pin_count > 0), the thread starts waiting on pinned_cond condition variable, guarded by cache_lock
+Once any of the threads releases the entry, and by decrementing pin_count sets it to 0, it also signals to thread
+waiting on pinned_cond. And this thread will restart workflow from paragraph 1.
+
+6. If either ce_fst_clrd or ce_fst_clrd_dirty have been assigned during the full circle over the entries,
+then
+6.1 if ce_fst_clrd is not NULL, we remove it from both buffer_cache and ev_buffer_cache and return as chosen for eviction
+6.2 Otherwise we write the memory referenced by ce_fst_clrd_dirty to the corresponding disk block and
+we remove ce_fst_clrd_dirty from both buffer_cache and ev_buffer_cache and return as chosen for eviction
+
+
+>> C3: Describe your implementation of write-behind.
+
+1. The process that intends to update some file data or meta-data updates
+the cache entry via 
+1) write_to_cache procedure for file data cache entries and meta-data entries on creation
+2) and release_meta_data (with dirty parameter set to true) for file meta data cache entries
+At this point only cache entry is updated, its dirty member is set to true
+and nothing is written to the disk.
+2. Once process chooses some entry for eviction, it checks its dirty member, and
+if it is set to true, the process writes the changed data to disk, before using
+this place in cache for the new cache entry.
+3. When starting the thread infrastructure, we, together with the idle thread, launch
+another thread named "cache-2-disk".
+This thread in the endless loop (broken only by cache_finish=true condition)
+3.1 if cache_start is set to true (which happens in the ini_buffer_cache procedure)
+algorithm goes through all the entries of the cache and writes their contents to disk if
+cache entry has its dirty member set to true, sets this memeber to false upon writing
+and then is put to sleep for WRITE_ALL_SLEEP_AC ticks.
+3.2 if cache_start is set to false (that means ini_buffer_cache procedure has not been
+called yet), is put to sleep for WRITE_ALL_SLEEP_INAC ticks.
+Note. cache_finish is set to true in the write_all_cache method if it is called from the filesys_done
+method in 4.
+4. filesys_done procedure, that shuts down file system module, now also calls write_all_cache procedure
+with the true parameter, this procedure goes through all the entries in the cache and if
+the dirty memeber of the any cache_entry is set to true, writes the corresponding cache
+contents to the disk. Also it sets  cache_finish to the value of the parameter, thus
+signaling the "cache-2-disk" thread, that it has to exit.
+
+>> C4: Describe your implementation of read-ahead.
+1. In the init_buffer_cache, we create a
+1) thread pool of 30(READ_AHEAD_POOL) read_ahead threads passing read_ahead_cache procedure as thread function
+2) a read_ahead_queue list, where each entry contains a sector to be read (entries are added by processes,
+as described in 3; and retrieved by read-ahead threads as described in 2)
+3) synchronization infrastructure -  lock read_ahead_lock and condition variable read_ahead_av
+2. read_ahead_cache procedure:
+2.1 In the outer loop that breaks only if cache_finish is set to true (cache_finish is set to true,
+when we shut down filesyste module in filesys_done, as described in C3, paragraph 4).
+2.2 The inner loop checks read_ahead_queue and if it is empty, waits on read_ahead_av condition variable guarded by
+read_ahead_lock; otherwise - pops the first entry from the list. The loop breaks once such entry is available.
+2.3 Retrieves sector id from the read_ahead_queue entry
+2.4 Checks that there is still no entry for this sector in the buffer cache (in case process managed to issue
+the inquiry for the sector and retrieve it already). If there is such an entry, we get another
+entry in the queue or wait con conditon variable, until such entry appears)
+2.5 If there is no such entry in the cache yet, we reda it from disk and put into cache.
+Before putting the entry to cache, we again check that there is still no entry for this sector in
+the buffer cache (common procedure for read-ahead and regular addition of cache entry).
+If it is not, we proceed with putting new entry to cache, otherwise we skip adding the entry, free the
+newly created cache entry and mark the corresponding bit of the cache_map bit map as unused.
+
+3. Adding "tasks" to read_ahead_queue:
+In the procedures inode_read_at and inode_write_at of the inode.c, after all blocks of the current request
+were read to the process buffer or updated from it (in case of write), the process adds a new task
+to read the next after last sector from the disk, if current size of the file allows it. 
+This task is implemented as an entry that is added at the
+end of the read_ahead_queue. After the "task" is added we signal on read_ahead_av condition variable to
+notify any read-ahead threads that are waiting on the same conditon variable for teh task to appear in the queue.
+
+---- SYNCHRONIZATION ----
+
+>> C5: When one process is actively reading or writing data in a
+>> buffer cache block, how are other processes prevented from evicting
+>> that block?
+Each cache entry has a pin_count member (initially equal to 0) that is used to prevent such situation.
+
+Reading\writing regular data (not file meta data):
+If some process intends to read from or write to cache:
+1. If the data is in the cache, the corresponding cache entry is chosen and its pinned
+member is incremeneted. This member is decremented, after reading to\writing from process
+buffer has finished.
+2. If the data is not in the cache, the cache entry is created and data is read to it from disk.
+At this point cache entry is not added to any of 2 hash tables yet, and thus remains invisible to
+the other processes that attempt eviction.
+At the same time the corresponding bit in the cache_map bitmap is set to true, which prevents writing
+to the same memory region (this bit is immediately set to true if process could find an unused space,
+and if process had to evict some cache entry, eviction process does not clear the corresponding bit,
+but insead keeps it selected for the new cache entry that will replace, the evicted one).
+Before nw cache entry is added to the hash tables we set its pinned member to true. This member is set
+back to false, after reading to\writing from process buffer has finished.
+
+Reading\writing file meta-data:
+As we do not read file meta data into the buffer, but instead read inode_disk members directly from cache,
+we increment pin_count member of the corresponding entry, once such entry containing file meta-data was
+found (load_inode_metadata procedure).
+Each method in the inode.c that calls load_inode_metadata, also calls release_inode_metadata procedure,
+after the corresponding data (file size or disk sector number) was read from the inode_disk. This procedure
+decrements pin_count the cache entry that contains metadata.
+
+Eviction:
+Eviction algorithm skips all the cache entries that have their pin_count member greater than 0. If it
+so happens that all the entries in the cache are pinned, the process that tries to evict an entry waits
+on pinned_cond conditon variable for some entry to become unpinned by all processes (pin_count = 0), 
+and other processes, once they decrement pin_count and find that as a result it is equal to 0, they signal
+on that condition variable to notify any processes that wait for unpinned entries to choose an entry for
+eviction.
+
+>> C6: During the eviction of a block from the cache, how are other
+>> processes prevented from attempting to access the block?
+
+Once cache eviction algorith has chosen a cache entry to evict, this entry is deleted
+from both buffer_cache and ev_buffer_cache hash tables, at the same time the
+corresponding bit in the cache_map bit map remains set to true. Thus,
+other processes are
+(1) not able to choose the same cache entry for eviction, as it is not present
+in the corresponding hash tables any longer
+(2) not able to write in the place in memeory where the data of the corresponding sector
+is kept, as this place is still marked as busy in the in the cache_map.
+
+---- RATIONALE ----
+
+>> C7: Describe a file workload likely to benefit from buffer caching,
+>> and workloads likely to benefit from read-ahead and write-behind.
+
+BUFFER-CACHING:
+With buffer caching the processes that manifest spatial and temporal locality 
+in their I/O operations will benefit. For example:
+1) processes that read\write small amounts of data from\to file (spatial locality)
+With buffer caching they don't have read a sector from disk each time they need to read next 20 or so
+bytes. Instead (assuming time locality of the inquries, otherwise entry might just get evicted from the cache)
+after the 1st cache miss, the reqired sector will already be in the cache and reading next bytes from it
+will be done with dramatic efficiency in speed, since the read is performed from main memory)
+2) If a process or group of processes tend to operate on the same sectors (individual or shared) over time 
+(and total number of sectors is not much greater than the cache size), most entries will stay
+in cache unevicted after the first read to cache during the whole time of operation, 
+and processes will experience minimum I/O time penalty.
+
+READ-AHEAD:
+Read ahead approach assumes that process, that reads some data from the disk or
+writes some data to it will soon (time locality) read/write to next block data from
+the file (spatial locality)
+In this case the implemented read-ahead approach would have the needed block already
+in cache for the process, and since read-ahead runs asynchronously, the time to read data
+from disk is not included in the execution time of the process (although since we have only one CPU
+this execution time is included, as inquiring process has to wait for read-ahead thread to execute).
+
+WRITE-BEHIND:
+Instead of writing data to the disk each time process intends to update data in a file or a sector,
+we use write-behind approach with which data is written to the disk in 3 cases:
+1. When system shuts down
+2. Approximately every 16 timer ticks
+3. If dirty entry is selected for eviction
+With this approach:
+1. If process writes to the same sector, writes can be accumulated in cache and transferred to disk
+in a single write operation, instead of writing every time sector contents is to be changed.
+2. If just few writes are made to the filesystem during process execution, the process may not experience
+time penalty for writing to disk altogether (with single CPU), since writes may be accomplished after
+process exited.
+3. With functionality of making a bunch write every 16 ticks, disk scheduler may reorder writes in 
+more efficient way.
+
+
+         SURVEY QUESTIONS
+         ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+N/A.

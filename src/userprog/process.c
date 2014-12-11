@@ -5,19 +5,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "userprog/gdt.h"
+#include "userprog/pagedir.h"
+#include "userprog/tss.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
-#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
-#include "userprog/gdt.h"
-#include "userprog/pagedir.h"
-#include "userprog/tss.h"
+#include "threads/malloc.h"
 #include "vm/frame.h"
 #include "vm/page.h"
 
@@ -295,7 +295,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   char *save_ptr;
   file_name = strtok_r ((char *) file_name, " ", &save_ptr);
   /* Open executable file. */
-  file = filesys_open (file_name);
+  filesys_open (file_name, &file, NULL, NULL);
   if (file == NULL)
     {
       printf ("load: %s: open failed\n", file_name);
@@ -382,7 +382,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
   lock_acquire(&exec_list_lock);
-  add_exec_threads_entry(thread_current());
+  add_exec_threads_entry(thread_current(), file);
   lock_release(&exec_list_lock);
   success = true;
 
@@ -471,9 +471,6 @@ load_segment (off_t ofs, uint8_t *upage, uint32_t read_bytes,
          and zero the final PAGE_ZERO_BYTES bytes. */
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
-	  if (writable) {
-		  //printf("Add writable segment \n");
-		  }
       add_page_segment(upage, writable, ofs, page_read_bytes,
                        page_zero_bytes);
 

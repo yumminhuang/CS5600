@@ -4,20 +4,21 @@
 #include <string.h>
 #include <hash.h>
 #include <limits.h>
-#include "devices/input.h"
+#include "threads/interrupt.h"
+#include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "threads/malloc.h"
+#include "userprog/pagedir.h"
+#include "userprog/process.h"
 #include "devices/shutdown.h"
+#include "devices/input.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
-#include "threads/interrupt.h"
-#include "threads/malloc.h"
-#include "threads/thread.h"
-#include "threads/vaddr.h"
-#include "userprog/pagedir.h"
-#include "userprog/process.h"
-#include "userprog/exception.h"
-#include "vm/frame.h"
+#include "filesys/inode.h"
 #include "vm/page.h"
+#include "vm/frame.h"
+#include "userprog/exception.h"
 
 #define BUFFER_SPLIT_SIZE 300
 
@@ -31,6 +32,8 @@ static int open (const char *file_name);
 static bool remove (const char *file_name);
 static int filesize (int fd);
 static struct file * thread_fd_to_file (int fd);
+static struct dir * thread_fd_to_dir (int fd);
+static bool thread_fd_is_dir (int fd);
 static void add_to_fds (struct thread *t, struct fd_to_file* opened_file);
 static int read (int fd, void *buffer, unsigned length);
 static void close (int fd);
@@ -39,6 +42,11 @@ static unsigned tell (int fd);
 static mapid_t mmap (int fd, void *addr);
 static void munmap (mapid_t mapping);
 static void munmap_mapping (struct mapping *m, struct thread *t);
+static bool chdir (const char *dir);
+static bool mkdir (const char *dir);
+static bool readdir (int fd, char *name);
+static bool isdir (int fd);
+static int inumber (int fd);
 
 static void retrieve_and_validate_args (int *ptr, int argnum, void **syscall_args_ptr);
 static void validate_pointer (void *addr, void *esp, bool writable);
@@ -55,7 +63,6 @@ void
 syscall_init (void)
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  lock_init(&filesyslock);
   sema_init(&exit_sema, 1);
 }
 
@@ -72,52 +79,52 @@ syscall_init (void)
  * frames, otherwise calls exit(-1) to terminate the offending user process.*/
 static void validate_pointer (void *addr, void *esp, bool writable) {
 
-    if (addr >= PHYS_BASE || addr == NULL
-        || addr < USER_VADDR_BOTTOM) {
-        exit(-1);
-    }
+	if (addr >= PHYS_BASE || addr == NULL
+	    || addr < USER_VADDR_BOTTOM) {
+		exit(-1);
+	}
 
-    /* Check if page is present and loaded, lock it so it is not swapped */
-    lock_acquire(&frames_lock);
-    struct page *p = page_lookup(addr, thread_current());
-    if (p && p->loaded) {
-        struct frame *f = frame_lookup(p->kaddr);
-        f->locked = true;
-    }
-    lock_release(&frames_lock);
+	/* Check if page is present and loaded, lock it so it is not swapped */
+	lock_acquire(&frames_lock);
+	struct page *p = page_lookup(addr, thread_current());
+	if (p && p->loaded) {
+		struct frame *f = frame_lookup(p->kaddr);
+		f->locked = true;
+	}
+	lock_release(&frames_lock);
 
-    /* If page is not loaded, load with frame locked */
-    if (p && !p->loaded && !load_page(p, true)) {
-        exit(-1);
-    }
+	/* If page is not loaded, load with frame locked */
+	if (p && !p->loaded && !load_page(p, true)) {
+		exit(-1);
+	}
 
-    /* Check for attempt to write into read-only memory */
-    if (p) {
-        if (writable) {
-            if(!p->writable) {
-                exit(-1);
-            }
-        }
-    } else
-    /* Memory unmapped, might lead to stack growth */
-    if (!p && esp) {
-      bool valid = false;
-      if (addr >= esp - STACK_GROWTH_HEURISTIC) {
-        if (PHYS_BASE - pg_round_down (addr)
-            <= MAX_STACK_SIZE) {
-          /* Grow with frame locked */
-          valid = grow_stack (addr, true, NULL);
-        }
-      }
-      if (!valid) {
-        exit(-1);
-      }
+	/* Check for attempt to write into read-only memory */
+	if (p) {
+		if (writable) {
+			if(!p->writable) {
+				exit(-1);
+			}
+		}
+	} else
+	/* Memory unmapped, might lead to stack growth */
+	if (!p && esp) {
+	  bool valid = false;
+	  if (addr >= esp - STACK_GROWTH_HEURISTIC) {
+	    if (PHYS_BASE - pg_round_down (addr)
+		    <= MAX_STACK_SIZE) {
+		  /* Grow with frame locked */
+	      valid = grow_stack (addr, true, NULL);
+		}
+	  }
+	  if (!valid) {
+	    exit(-1);
+	  }
 
-    /* if esp == null, we are checking the stack pointer
-     * thus stack growth does not apply to such situation */
-    } else {
-      exit(-1);
-    }
+	/* if esp == null, we are checking the stack pointer
+	 * thus stack growth does not apply to such situation */
+	} else {
+	  exit(-1);
+	}
 }
 
 /* Resolves the called function from system call number,
@@ -128,477 +135,561 @@ syscall_handler (struct intr_frame *f)
 {
  int *syscall = (int *)f->esp;
  validate_pointer(syscall, NULL, /* Writeable */ false);
-    switch (*syscall) {
-        case SYS_HALT: {
-            halt();
-            break;
-        }
-        case SYS_WRITE: {
-            void *args[3];
-            retrieve_and_validate_args(syscall, 3, args);
-            char *buff_ptr = (char *)*(int *)args[1];
-            validate_buffer (buff_ptr, *(int *)args[2], NULL, /* Writeable */ false);
-            f->eax = write (*(int *)args[0], buff_ptr, *(int *)args[2]);
-            unlock_args_memory(syscall, 3, args);
-            break;
-        }
-        case SYS_OPEN: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            char *buff_ptr = (char *)*(int *)args[0];
-            validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
-            f->eax = open (buff_ptr);
-            unlock_args_memory(syscall, 1, args);
-            break;
-        }
-        case SYS_EXIT: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            f->eax = *(int *)args[0];
-            exit(*(int *)args[0]);
-            break;
-        }
-        case SYS_EXEC: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            char *buff_ptr = (char *)*(int *)args[0];
-            validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
-            int child_id = exec(buff_ptr);
-            f->eax = child_id;
-            unlock_args_memory(syscall, 1, args);
-            break;
-        }
-        case SYS_WAIT: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            f->eax = wait(*(int *) args[0]);
-            unlock_args_memory(syscall, 1, args);
-            break;
-        }
-        case SYS_CREATE: {
-            // File system code checks for name length, so we do not need to.
-            void *args[2];
-            retrieve_and_validate_args(syscall, 2, args);
-            char *buff_ptr = (char *)*(int *)args[0];
-            validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
-            f->eax = create(buff_ptr, *(int *)args[1]);
-            unlock_args_memory(syscall, 2, args);
-            break;
-            }
-        case SYS_REMOVE: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            char *buff_ptr = (char *)*(int *)args[0];
-            validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
-            f->eax = remove (buff_ptr);
-            unlock_args_memory(syscall, 1, args);
-            break;
-            }
-        case SYS_FILESIZE: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            int file_sz = filesize(*(int *)args[0]);
-            if (file_sz == -1) {
-                exit (-1);
-            }
-            else {
-                f->eax = file_sz;
-            }
-            unlock_args_memory(syscall, 1, args);
-            break;
-            }
-        case SYS_READ: {
-            void *args[3];
-            retrieve_and_validate_args(syscall, 3, args);
-            char *buff_ptr = (char *)*(int *)args[1];
-            validate_buffer(buff_ptr, *(unsigned *)args[2], f->esp, true);
-            f->eax = read (*(int *)args[0], buff_ptr, *(unsigned *)args[2]);
-            unlock_args_memory(syscall, 3, args);
-            break;
-        }
-        case SYS_SEEK: {
-            void *args[2];
-            retrieve_and_validate_args(syscall, 2, args);
-            seek (*(int *)args[0], *(unsigned *)args[1]);
-            unlock_args_memory(syscall, 2, args);
-            break;
-            }
-        case SYS_TELL: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            f->eax = tell(*(int *)args[0]);
-            unlock_args_memory(syscall, 1, args);
-            break;
-            }
-        case SYS_CLOSE: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            close (*(int *)args[0]);
-            unlock_args_memory(syscall, 1, args);
-            break;
-        }
-        case SYS_MMAP: {
-            void *args[2];
-            retrieve_and_validate_args(syscall, 2, args);
-            f->eax = mmap(*(int *)args[0], (char *)*(int *)args[1]);
-            unlock_args_memory(syscall, 2, args);
-            break;
-        }
-        case SYS_MUNMAP: {
-            void *args[1];
-            retrieve_and_validate_args(syscall, 1, args);
-            munmap((mapid_t)*(int *)args[0]);
-            unlock_args_memory(syscall, 1, args);
-            break;
-        }
-    }
+	switch (*syscall) {
+		case SYS_HALT: {
+			halt();
+			break;
+		}
+		case SYS_WRITE: {
+			void *args[3];
+			retrieve_and_validate_args(syscall, 3, args);
+			char *buff_ptr = (char *)*(int *)args[1];
+			validate_buffer (buff_ptr, *(int *)args[2], NULL, /* Writeable */ false);
+			f->eax = write (*(int *)args[0], buff_ptr, *(int *)args[2]);
+			unlock_args_memory(syscall, 3, args);
+			break;
+		}
+		case SYS_OPEN: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			char *buff_ptr = (char *)*(int *)args[0];
+			validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
+			f->eax = open (buff_ptr);
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+		case SYS_EXIT: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			f->eax = *(int *)args[0];
+			exit(*(int *)args[0]);
+			break;
+		}
+		case SYS_EXEC: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			char *buff_ptr = (char *)*(int *)args[0];
+			validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
+			int child_id = exec(buff_ptr);
+			f->eax = child_id;
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+		case SYS_WAIT: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			f->eax = wait(*(int *) args[0]);
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+		case SYS_CREATE: {
+			// File system code checks for name length, so we do not need to.
+			void *args[2];
+			retrieve_and_validate_args(syscall, 2, args);
+			char *buff_ptr = (char *)*(int *)args[0];
+			validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
+			f->eax = create(buff_ptr, *(int *)args[1]);
+			unlock_args_memory(syscall, 2, args);
+			break;
+			}
+		case SYS_REMOVE: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			char *buff_ptr = (char *)*(int *)args[0];
+			validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
+			f->eax = remove (buff_ptr);
+			unlock_args_memory(syscall, 1, args);
+			break;
+			}
+		case SYS_FILESIZE: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			int file_sz = filesize(*(int *)args[0]);
+			if (file_sz == -1) {
+				exit (-1);
+			}
+			else {
+				f->eax = file_sz;
+			}
+			unlock_args_memory(syscall, 1, args);
+			break;
+			}
+		case SYS_READ: {
+			void *args[3];
+			retrieve_and_validate_args(syscall, 3, args);
+			char *buff_ptr = (char *)*(int *)args[1];
+			validate_buffer(buff_ptr, *(unsigned *)args[2], f->esp, true);
+			f->eax = read (*(int *)args[0], buff_ptr, *(unsigned *)args[2]);
+			unlock_args_memory(syscall, 3, args);
+			break;
+		}
+		case SYS_SEEK: {
+			void *args[2];
+			retrieve_and_validate_args(syscall, 2, args);
+			seek (*(int *)args[0], *(unsigned *)args[1]);
+			unlock_args_memory(syscall, 2, args);
+			break;
+			}
+		case SYS_TELL: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			f->eax = tell(*(int *)args[0]);
+			unlock_args_memory(syscall, 1, args);
+			break;
+			}
+		case SYS_CLOSE: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			close (*(int *)args[0]);
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+		case SYS_MMAP: {
+			void *args[2];
+			retrieve_and_validate_args(syscall, 2, args);
+			f->eax = mmap(*(int *)args[0], (char *)*(int *)args[1]);
+			unlock_args_memory(syscall, 2, args);
+			break;
+		}
+		case SYS_MUNMAP: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			munmap((mapid_t)*(int *)args[0]);
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+		case SYS_CHDIR: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			char *buff_ptr = (char *)*(int *)args[0];
+			validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
+			f->eax = chdir(buff_ptr);
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+		case SYS_MKDIR: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			char *buff_ptr = (char *)*(int *)args[0];
+			validate_pointer(buff_ptr, f->esp, /* Writeable */ false);
+			f->eax = mkdir(buff_ptr);
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+		case SYS_READDIR: {
+			void *args[2];
+			retrieve_and_validate_args(syscall, 2, args);
+			char *buff_ptr = (char *)*(int *)args[1];
+			validate_buffer(buff_ptr, READDIR_MAX_LEN + 1, f->esp, true);
+			f->eax = readdir(*(int *)args[0], buff_ptr);
+			unlock_args_memory(syscall, 2, args);
+			break;
+		}
+		case SYS_ISDIR: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			f->eax = isdir(*(int *)args[0]);
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+		case SYS_INUMBER: {
+			void *args[1];
+			retrieve_and_validate_args(syscall, 1, args);
+			f->eax = inumber(*(int *)args[0]);
+			unlock_args_memory(syscall, 1, args);
+			break;
+		}
+	}
 
 }
 
 /* Retrieves arguments for system call from the frame.
-    Validates pointers, locks corresponding frames*/
+	Validates pointers, locks corresponding frames*/
 static
 void retrieve_and_validate_args (int *ptr, int argnum, void **syscall_args_ptr) {
-    int i = 0;
-    while (argnum > 0) {
-        void *arg_ptr = (void *) ++ptr;
-        validate_pointer (arg_ptr, NULL, NULL);
-        syscall_args_ptr[i] = arg_ptr;
-        i++;
-        argnum--;
-    }
+	int i = 0;
+	while (argnum > 0) {
+		void *arg_ptr = (void *) ++ptr;
+		validate_pointer (arg_ptr, NULL, NULL);
+		syscall_args_ptr[i] = arg_ptr;
+		i++;
+		argnum--;
+	}
 }
 
 /* Retrieves arguments for system call from the frame.
-    Validates pointers, locks corresponding frames*/
+	Validates pointers, locks corresponding frames*/
 static
 void unlock_args_memory (int *ptr, int argnum, void **syscall_args_ptr) {
-    int i = 0;
-    while (argnum > 0) {
-        void *arg_ptr = (void *) ++ptr;
-        lock_acquire(&frames_lock);
-        struct page *p = page_lookup(arg_ptr, thread_current());
-        if (p && p->loaded) {
-            struct frame *f = frame_lookup(p->kaddr);
-            f->locked = false;
-        }
-        lock_release(&frames_lock);
-        syscall_args_ptr[i] = arg_ptr;
-        i++;
-        argnum--;
-    }
+	int i = 0;
+	while (argnum > 0) {
+		void *arg_ptr = (void *) ++ptr;
+		lock_acquire(&frames_lock);
+		struct page *p = page_lookup(arg_ptr, thread_current());
+		if (p && p->loaded) {
+			struct frame *f = frame_lookup(p->kaddr);
+			f->locked = false;
+		}
+		lock_release(&frames_lock);
+		syscall_args_ptr[i] = arg_ptr;
+		i++;
+		argnum--;
+	}
 }
 
 /* Validates start and all pages that buffer occupies. */
 static void validate_buffer (char* buff_ptr, int size, void* esp, bool writable) {
-    validate_pointer (buff_ptr, esp, writable);
-    int pages = size / PGSIZE;
-    int rest = size % PGSIZE;
-    int k;
-    for (k = 1; k <= pages; k++) {
-        validate_pointer (buff_ptr + k * PGSIZE, esp, writable);
-    }
-    if (rest != 0) {
-        validate_pointer (buff_ptr + size, esp, writable);
-    }
+	validate_pointer (buff_ptr, esp, writable);
+	int pages = size / PGSIZE;
+	int rest = size % PGSIZE;
+	int k;
+	for (k = 1; k <= pages; k++) {
+		validate_pointer (buff_ptr + k * PGSIZE, esp, writable);
+	}
+	if (rest != 0) {
+		validate_pointer (buff_ptr + size, esp, writable);
+	}
 }
 
 static void unlock_buffer (const char* buff_ptr, int size) {
-    lock_acquire(&frames_lock);
-    struct page *p = page_lookup(buff_ptr, thread_current());
-    struct frame *f = frame_lookup(p->kaddr);
+	lock_acquire(&frames_lock);
+	struct page *p = page_lookup(buff_ptr, thread_current());
+	struct frame *f = frame_lookup(p->kaddr);
 
-    f->locked = false;
-    int pages = size / PGSIZE;
-    int rest = size % PGSIZE;
-    int k;
-    for (k = 1; k <= pages; k++) {
-        p = page_lookup(buff_ptr + k * PGSIZE, thread_current());
-        f = frame_lookup(p->kaddr);
-        f->locked = false;
-    }
-    if (rest != 0) {
-        p = page_lookup(buff_ptr + size, thread_current());
-        f = frame_lookup(p->kaddr);
-        f->locked = false;
-    }
-    cond_signal(&frames_locked, &frames_lock);
-    lock_release(&frames_lock);
+	f->locked = false;
+	int pages = size / PGSIZE;
+	int rest = size % PGSIZE;
+	int k;
+	for (k = 1; k <= pages; k++) {
+		p = page_lookup(buff_ptr + k * PGSIZE, thread_current());
+		f = frame_lookup(p->kaddr);
+		f->locked = false;
+	}
+	if (rest != 0) {
+		p = page_lookup(buff_ptr + size, thread_current());
+		f = frame_lookup(p->kaddr);
+		f->locked = false;
+	}
+	cond_signal(&frames_locked, &frames_lock);
+	lock_release(&frames_lock);
 }
 
 /* Terminates Pintos by calling shutdown_power_off().*/
 static void halt (void) {
-    shutdown_power_off();
+	shutdown_power_off();
 }
 
 /* Terminates the current user program, returning status to the kernel.
  * Updates status in the children status list of the parent process.
  * Closes all open files. Closes own executable and calls thread_exit(). */
 void exit (int status) {
-    struct thread *t = thread_current();
-    printf ("%s: exit(%d)\n", t->name, status);
+	struct thread *t = thread_current();
+	printf ("%s: exit(%d)\n", t->name, status);
 
-    /* Clean up mappings */
-    struct hash *mapids_ptr = &t->mapids;
-    hash_destroy(mapids_ptr, mapids_destructor_func);
+	/* Clean up mappings */
+	struct hash *mapids_ptr = &t->mapids;
+	hash_destroy(mapids_ptr, mapids_destructor_func);
 
-    /* Clean up files */
-    struct hash *fds_ptr = &t->fds;
-    hash_destroy(fds_ptr, fds_destructor_func);
+	if (t->cwd)
+		dir_close(t->cwd);
 
-    lock_acquire(&exec_list_lock);
-    remove_exec_threads_entry(t);
-    lock_release(&exec_list_lock);
+	/* Clean up files */
+	struct hash *fds_ptr = &t->fds;
+	hash_destroy(fds_ptr, fds_destructor_func);
 
-    /* Close executable */
-    lock_acquire(&filesyslock);
-    file_close(t->exec);
-    lock_release(&filesyslock);
+	lock_acquire(&exec_list_lock);
+	remove_exec_threads_entry(t);
+	lock_release(&exec_list_lock);
 
-    /* Destroy supplementary page table */
-    hash_destroy(&t->page_table, page_destructor);
+	/* Close executable */
+	file_close(t->exec);
 
-    sema_down(&exit_sema);
+	/* Destroy supplementary page table */
+	hash_destroy(&t->page_table, page_destructor);
 
-    /* Clean up children list and notify them that parent is exiting */
-    hash_destroy(&thread_current()->children, ct_destructor_func);
+	sema_down(&exit_sema);
 
-    if (t->parent != NULL) {
-        struct thread *p = t->parent;
-        //signal exit status to the parent
-        struct childtracker *ct = find_child_rec(p, thread_current()->tid);
-        if (ct != NULL) {
-            lock_acquire(&ct->wait_lock);
-            ct->exit_status = status;
-            ct->state = CHILD_EXITING;
-            ct->child = NULL;
-            cond_signal(&ct->wait_cond, &ct->wait_lock);
-            lock_release(&ct->wait_lock);
-        }
-    }
-    sema_up(&exit_sema);
-    thread_exit();
+	/* Clean up children list and notify them that parent is exiting */
+	hash_destroy(&thread_current()->children, ct_destructor_func);
+
+	if (t->parent != NULL) {
+		struct thread *p = t->parent;
+		//signal exit status to the parent
+		struct childtracker *ct = find_child_rec(p, thread_current()->tid);
+		if (ct != NULL) {
+			lock_acquire(&ct->wait_lock);
+			ct->exit_status = status;
+			ct->state = CHILD_EXITING;
+			ct->child = NULL;
+			cond_signal(&ct->wait_cond, &ct->wait_lock);
+			lock_release(&ct->wait_lock);
+		}
+	}
+	sema_up(&exit_sema);
+	thread_exit();
 }
 
 /* Runs the executable whose name is given in cmd_line,
    passing any given arguments, and returns the new process's
    program id. */
 static tid_t exec (const char *file_name){
-    lock_acquire(&filesyslock);
-    tid_t child = process_execute (file_name);
-    lock_release(&filesyslock);
-    return child;
+
+	tid_t child = process_execute (file_name);
+
+	return child;
 }
 
 /* Waits for a child process pid and returns the child's exit status. */
 static int wait (tid_t child_id) {
-    return process_wait(child_id);
+	return process_wait(child_id);
 }
 
 /* Creates a new file called file initially initial_size bytes in size. */
 static bool create (const char *file_name, unsigned initial_size) {
-        lock_acquire(&filesyslock);
-        int fd = filesys_create(file_name, initial_size);
-        lock_release(&filesyslock);
-        return fd;
-    }
 
- /* Opens the file called file. Returns a nonnegative integer
-   file descriptor or -1 if the file could not be opened.*/
+		int fd = filesys_create(file_name, initial_size, false);
+
+		return fd;
+	}
+
+ /* Opens the file or directory called FILL_NAME. Returns a
+    nonnegative integer file descriptor or -1 if the file or
+    directory could not be opened.*/
  static int open (const char *file_name) {
-     struct thread *t = thread_current();
 
-     if (hash_size(&t->fds) == MAX_FILES) {
-         return -1;
-     }
+	 struct thread *t = thread_current();
+	 struct file *file_ptr = NULL;
+	 struct dir *dir_ptr = NULL;
+	 bool isdir = false;
 
-     lock_acquire(&filesyslock);
-     struct file *file_ptr = filesys_open(file_name);
-     lock_release(&filesyslock);
-     if (file_ptr == NULL) {
-            return -1;
-     }
-     struct fd_to_file *opened_file = malloc(sizeof (struct fd_to_file));
-     opened_file->file_ptr = file_ptr;
-     add_to_fds(t, opened_file);
-     return opened_file->fd;
+	 if (hash_size(&t->fds) == MAX_FILES) {
+		 return -1;
+	 }
+
+	 filesys_open(file_name, &file_ptr, &dir_ptr, &isdir);
+
+	 if (!isdir) {
+	    if (file_ptr == NULL) {
+	 	  return -1;
+	    }
+	 } else {
+	    if (dir_ptr == NULL) {
+	 	  return -1;
+	    }
+	 }
+	 struct fd_to_file *opened_file = malloc(sizeof (struct fd_to_file));
+	 opened_file->file_ptr = file_ptr;
+	 opened_file->dir_ptr = dir_ptr;
+	 opened_file->isdir = isdir;
+	 add_to_fds(t, opened_file);
+	 return opened_file->fd;
 }
 /* Allocates new file descriptor id, assigns it to opened_file fd_to_file
    and adds fd_to_file to the hash table of the thread pointed to by t.*/
 static void add_to_fds(struct thread *t, struct fd_to_file *opened_file) {
-     do {
-             if (t->fd_cnt == USHRT_MAX) {
-                 t->fd_cnt = 1;
-             }
-             opened_file->fd = ++t->fd_cnt;
-         }
-     while (hash_insert(&t->fds, &opened_file->elem) != NULL);
+	 do {
+			 if (t->fd_cnt == USHRT_MAX) {
+				 t->fd_cnt = 1;
+			 }
+			 opened_file->fd = ++t->fd_cnt;
+		 }
+	 while (hash_insert(&t->fds, &opened_file->elem) != NULL);
 }
 
 
  /* Deletes the file called file. Returns true if successful, false otherwise. */
  static bool remove (const char *file_name) {
-        lock_acquire(&filesyslock);
-        bool removed = filesys_remove(file_name);
-        lock_release(&filesyslock);
-        return removed;
+
+		bool removed = filesys_remove(file_name);
+
+		return removed;
  }
 
  /* Returns the size, in bytes, of the file open as fd, -1
-    if process does not own file descriptor*/
+	if process does not own file descriptor*/
  static int filesize (int fd) {
-     struct file *file_ptr = thread_fd_to_file(fd);
-     int size = -1;
-     if (file_ptr != NULL) {
-        lock_acquire(&filesyslock);
-        size = file_length(file_ptr);
-        lock_release(&filesyslock);
-     }
-     return size;
+	 struct file *file_ptr = thread_fd_to_file(fd);
+	 int size = -1;
+	 if (file_ptr != NULL) {
+
+		size = file_length(file_ptr);
+
+	 }
+	 return size;
   }
 
  /* Returns pointer to a file if it is opened by current thread,
   * null - otherwise. */
  static struct file * thread_fd_to_file (int fd) {
-    struct fd_to_file ftf;
-    struct fd_to_file *ftf_ptr ;
-    ftf.fd = fd;
-    struct hash_elem *e = hash_find(&thread_current()->fds, &ftf.elem);
-    if (e == NULL) {
-        return NULL;
-    }
-    ftf_ptr = hash_entry(e, struct fd_to_file, elem);
-    return ftf_ptr->file_ptr;
+	struct fd_to_file ftf;
+	struct fd_to_file *ftf_ptr ;
+	ftf.fd = fd;
+	struct hash_elem *e = hash_find(&thread_current()->fds, &ftf.elem);
+	if (e == NULL) {
+		return NULL;
+	}
+	ftf_ptr = hash_entry(e, struct fd_to_file, elem);
+	return ftf_ptr->file_ptr;
+ }
+
+ /* Returns pointer to a directory if it is opened by current thread,
+  * null - otherwise. */
+ static struct dir * thread_fd_to_dir (int fd) {
+	struct fd_to_file ftf;
+	struct fd_to_file *ftf_ptr ;
+	ftf.fd = fd;
+	struct hash_elem *e = hash_find(&thread_current()->fds, &ftf.elem);
+	if (e == NULL) {
+		return NULL;
+	}
+	ftf_ptr = hash_entry(e, struct fd_to_file, elem);
+	return ftf_ptr->dir_ptr;
+ }
+
+ /* Returns true if a directory is opened as fd */
+ static bool thread_fd_is_dir (int fd) {
+	struct fd_to_file ftf;
+	struct fd_to_file *ftf_ptr ;
+	ftf.fd = fd;
+	struct hash_elem *e = hash_find(&thread_current()->fds, &ftf.elem);
+	if (e == NULL) {
+		return NULL;
+	}
+	ftf_ptr = hash_entry(e, struct fd_to_file, elem);
+	return ftf_ptr->isdir;
  }
 
 /* Reads size bytes from the file open as fd into buffer.
    Returns the number of bytes actually read. */
 static int read (int fd, void *buffer, unsigned length) {
-    if (fd == 1) {
-        return -1;
-    }
-    if (fd == 0) {
-        char *b = (char *) buffer;
-        int i = 0;
-        while (length > 0 || b[i-1] != '\n') {
-            b[i] = input_getc();
-            i++;
-            length--;
-        }
-        unlock_buffer(buffer, length);
-        return i;
-    }
-    struct file *file_ptr = thread_fd_to_file(fd);
+	if (fd == 1) {
+		return -1;
+	}
+	if (fd == 0) {
+		char *b = (char *) buffer;
+		int i = 0;
+		while (length > 0 || b[i-1] != '\n') {
+			b[i] = input_getc();
+			i++;
+			length--;
+		}
+		unlock_buffer(buffer, length);
+		return i;
+	}
+	struct file *file_ptr = thread_fd_to_file(fd);
 
-    if (file_ptr != NULL) {
-        lock_acquire(&filesyslock);
-        length = file_read(file_ptr, buffer, length);
-        lock_release(&filesyslock);
-        unlock_buffer(buffer, length);
-        return length;
-    }
-    return -1;
+	if (file_ptr != NULL) {
+
+		length = file_read(file_ptr, buffer, length);
+
+		unlock_buffer(buffer, length);
+		return length;
+	}
+	return -1;
 }
 
 /* Writes contents of the buffer to the given file descriptor. */
 static int write (int fd, const void *buffer, unsigned length) {
 
-    const char *b = (char *) buffer;
-    if (fd == 1) {
-        int it = length / BUFFER_SPLIT_SIZE;
-        int rem = length % BUFFER_SPLIT_SIZE;
-        int k;
-        for(k = 0; k < it; k++) {
-            putbuf(b + BUFFER_SPLIT_SIZE * k, BUFFER_SPLIT_SIZE);
-        }
-        if (rem != 0) {
-            putbuf(b + BUFFER_SPLIT_SIZE * it, rem);
-        }
-        unlock_buffer(b, length);
-        return length;
-    }
-    else if (fd == 0) {
-        return 0;
-    }
-    else {
-       struct file *file_ptr = thread_fd_to_file(fd);
-       if (file_ptr != NULL) {
-           lock_acquire(&filesyslock);
-           length = file_write(file_ptr, b, length);
-           lock_release(&filesyslock);
-           unlock_buffer(b, length);
+	const char *b = (char *) buffer;
+	if (fd == 1) {
+		int it = length / BUFFER_SPLIT_SIZE;
+		int rem = length % BUFFER_SPLIT_SIZE;
+		int k;
+		for(k = 0; k < it; k++) {
+			putbuf(b + BUFFER_SPLIT_SIZE * k, BUFFER_SPLIT_SIZE);
+		}
+		if (rem != 0) {
+			putbuf(b + BUFFER_SPLIT_SIZE * it, rem);
+		}
+		unlock_buffer(b, length);
+		return length;
+	}
+	else if (fd == 0) {
+		return 0;
+	}
+	else {
+	   struct file *file_ptr = thread_fd_to_file(fd);
+	   if (file_ptr != NULL) {
 
-           return length;
-        }
-        return 0;
-    }
+		   length = file_write(file_ptr, b, length);
+
+		   unlock_buffer(b, length);
+
+		   return length;
+		}
+		/* If file_ptr is NULL, fd may represent a directory.
+		   Try to write to directory must fail */
+		return -1;
+	}
 }
 
 /*Closes a file, if process owns file descriptor.
   Removes file descriptor from the list of the process.*/
 static void close (int fd) {
-    struct fd_to_file ftf;
-    ftf.fd = fd;
-    struct hash *fds_ptr = &thread_current()->fds;
-    struct hash_elem *e = hash_delete(fds_ptr, &ftf.elem);
-    if (e == NULL) {return;}
-    struct fd_to_file *ftf_ptr = hash_entry(e, struct fd_to_file, elem);
-    lock_acquire(&filesyslock);
-    file_close(ftf_ptr->file_ptr);
-    lock_release(&filesyslock);
-    free(ftf_ptr);
+	struct fd_to_file ftf;
+	ftf.fd = fd;
+	struct hash *fds_ptr = &thread_current()->fds;
+	struct hash_elem *e = hash_delete(fds_ptr, &ftf.elem);
+	if (e == NULL) {return;}
+	struct fd_to_file *ftf_ptr = hash_entry(e, struct fd_to_file, elem);
+
+	if (ftf_ptr->file_ptr != NULL)
+		file_close(ftf_ptr->file_ptr);
+	else 
+		dir_close(ftf_ptr->dir_ptr);
+
+	free(ftf_ptr);
 }
 
 /* Changes the next byte to be read or written in open file fd
    to position, expressed in bytes from the beginning of the file.*/
 static void seek (int fd, unsigned position) {
-    struct file *file_ptr = thread_fd_to_file(fd);
-    if (file_ptr != NULL) {
-        lock_acquire(&filesyslock);
-        file_seek(file_ptr, position);
-        lock_release(&filesyslock);
-    }
+	struct file *file_ptr = thread_fd_to_file(fd);
+	if (file_ptr != NULL) {
+
+		file_seek(file_ptr, position);
+
+	}
 }
 
 
 /* Returns the position of the next byte to be read or written
  in open file fd, expressed in bytes from the beginning of the file. */
 static unsigned tell (int fd) {
-    struct file *file_ptr = thread_fd_to_file(fd);
-    unsigned position = -1;
-    if (file_ptr != NULL) {
-        lock_acquire(&filesyslock);
-        position = file_tell(file_ptr);
-        lock_release(&filesyslock);
-    }
-    return position;
+	struct file *file_ptr = thread_fd_to_file(fd);
+	unsigned position = -1;
+	if (file_ptr != NULL) {
+
+		position = file_tell(file_ptr);
+
+	}
+	return position;
 }
 
 /* Destructor of the fd_to_file. Closes respective file within
    guarded secion and frees memory allocated to fd_to_file. */
 void fds_destructor_func (struct hash_elem *e, void *aux) {
-    struct fd_to_file *ftf = hash_entry (e, struct fd_to_file, elem);
-    struct lock *fs_lock = (struct lock *) aux;
-    lock_acquire(fs_lock);
-    file_close(ftf->file_ptr);
-    lock_release(fs_lock);
-    free(ftf);
+	struct fd_to_file *ftf = hash_entry (e, struct fd_to_file, elem);
+	file_close(ftf->file_ptr);
+	dir_close(ftf->dir_ptr);
+	free(ftf);
 }
 
 void mapids_destructor_func (struct hash_elem *e, void *aux UNUSED) {
-    struct mapping *m = hash_entry (e, struct mapping, elem);
-    munmap_mapping (m, thread_current ());
-    free(m);
+	struct mapping *m = hash_entry (e, struct mapping, elem);
+	munmap_mapping (m, thread_current ());
+	free(m);
 }
 
 /* Destructor of the childtracker. If child has not exited yet,
    sets its parent member to NULL. Frees memory. */
 void ct_destructor_func (struct hash_elem *e, void *aux UNUSED) {
-    struct childtracker *ct = hash_entry (e, struct childtracker, elem);
-    if (ct->child != NULL) {
-        ct->child->parent = NULL;
-    }
-    free(ct);
+	struct childtracker *ct = hash_entry (e, struct childtracker, elem);
+	if (ct->child != NULL) {
+		ct->child->parent = NULL;
+	}
+	free(ct);
 }
 
 /* Maps the file open as fd into the process's
@@ -606,121 +697,180 @@ void ct_destructor_func (struct hash_elem *e, void *aux UNUSED) {
  consecutive virtual pages starting at addr. */
 static mapid_t mmap (int fd, void *addr) {
 
-    /* console input and output are not mappable */
-    if (fd == STDIN_FILENO || fd == STDOUT_FILENO) {
-        return MAP_FAILED;
-    }
+	/* console input and output are not mappable */
+	if (fd == STDIN_FILENO || fd == STDOUT_FILENO) {
+		return MAP_FAILED;
+	}
 
-    int size = filesize(fd);
-    /* if the file open as fd has a length of zero bytes
-     * or if an error occurs in filesize */
-    if (size == -1 || size == 0) {
-        return MAP_FAILED;
-    }
+	int size = filesize(fd);
+	/* if the file open as fd has a length of zero bytes
+	 * or if an error occurs in filesize */
+	if (size == -1 || size == 0) {
+		return MAP_FAILED;
+	}
 
-    /* if addr is not page-aligned */
-    if (pg_ofs(addr) != 0) {
-        return MAP_FAILED;
-    }
+	/* if addr is not page-aligned */
+	if (pg_ofs(addr) != 0) {
+		return MAP_FAILED;
+	}
 
-    /* if addr is 0 */
-    if (!addr) {
-        return MAP_FAILED;
-    }
+	/* if addr is 0 */
+	if (!addr) {
+		return MAP_FAILED;
+	}
 
-    int page_num = size / PGSIZE;
-    int rem_bytes = size % PGSIZE;
-    if (rem_bytes != 0) {
-        page_num++;
-    }
+	int page_num = size / PGSIZE;
+	int rem_bytes = size % PGSIZE;
+	if (rem_bytes != 0) {
+		page_num++;
+	}
 
-    struct thread *t = thread_current();
+	struct thread *t = thread_current();
 
-    /* if the range of pages mapped overlaps any existing set of
-     * mapped pages */
-    void * ckexist_pt = addr;
-    int ckexist_cnt;
-    for (ckexist_cnt = 0; ckexist_cnt < page_num;
-        ckexist_cnt++, ckexist_pt += PGSIZE) {
-        if (page_lookup(ckexist_pt, t)) {
-            return MAP_FAILED;
-        }
-    }
+	/* if the range of pages mapped overlaps any existing set of
+	 * mapped pages */
+	void * ckexist_pt = addr;
+	int ckexist_cnt;
+	for (ckexist_cnt = 0; ckexist_cnt < page_num;
+		ckexist_cnt++, ckexist_pt += PGSIZE) {
+		if (page_lookup(ckexist_pt, t)) {
+			return MAP_FAILED;
+		}
+	}
 
-    struct file *file_ptr = thread_fd_to_file(fd);
-    if (file_ptr == NULL) {
-        return MAP_FAILED;
-    }
+	struct file *file_ptr = thread_fd_to_file(fd);
+	if (file_ptr == NULL) {
+		return MAP_FAILED;
+	}
 
-    /* use file_reopen function to obtain a separate and
-     * independent reference to the file */
-    lock_acquire(&filesyslock);
-    struct file *refile_ptr = file_reopen(file_ptr);
-    lock_release(&filesyslock);
-    if (refile_ptr == NULL) {
-        return MAP_FAILED;
-    }
+	/* use file_reopen function to obtain a separate and
+	 * independent reference to the file */
 
-    /* add to supplemental page table */
-    int offset = 0;
-    void *naddr = addr;
-    while (size > 0) {
-        uint32_t read_bytes = size >= PGSIZE? PGSIZE : size;
-        uint32_t zero_bytes = PGSIZE - read_bytes;
+	struct file *refile_ptr = file_reopen(file_ptr);
 
-        add_page_mmap(naddr, offset, refile_ptr,
-                        read_bytes, zero_bytes);
+	if (refile_ptr == NULL) {
+		return MAP_FAILED;
+	}
 
-        size -= read_bytes;
-        offset += read_bytes;
-        naddr += PGSIZE;
-    }
+	/* add to supplemental page table */
+	int offset = 0;
+	void *naddr = addr;
+	while (size > 0) {
+		uint32_t read_bytes = size >= PGSIZE? PGSIZE : size;
+		uint32_t zero_bytes = PGSIZE - read_bytes;
 
-    /* create new mapping, add to mapids */
-    struct mapping *m;
-    m = (struct mapping *)malloc(sizeof(struct mapping));
-    m->addr = addr;
-    m->pnum = page_num;
-    do {
-        if (t->mapid_cnt == USHRT_MAX) {
-         t->mapid_cnt = 1;
-        }
-        m->mapid = ++t->mapid_cnt;
-     }
-    while (hash_insert(&t->mapids, &m->elem) != NULL);
+		add_page_mmap(naddr, offset, refile_ptr,
+						read_bytes, zero_bytes);
 
-    return m->mapid;
+		size -= read_bytes;
+		offset += read_bytes;
+		naddr += PGSIZE;
+	}
+
+	/* create new mapping, add to mapids */
+	struct mapping *m;
+	m = (struct mapping *)malloc(sizeof(struct mapping));
+	m->addr = addr;
+	m->pnum = page_num;
+	do {
+		if (t->mapid_cnt == USHRT_MAX) {
+		 t->mapid_cnt = 1;
+		}
+		m->mapid = ++t->mapid_cnt;
+	 }
+	while (hash_insert(&t->mapids, &m->elem) != NULL);
+
+	return m->mapid;
 }
 
 /* Unmaps the mapping designated by mapping. */
 static void munmap (mapid_t mapping) {
-    struct mapping m_;
-    struct mapping *m;
-    struct hash_elem *e;
-    struct thread *t = thread_current();
-    m_.mapid = mapping;
-    e = hash_find(&t->mapids, &m_.elem);
-    if (e != NULL) {
-        m = hash_entry(e, struct mapping, elem);
-    } else {
-        return;
-    }
+	struct mapping m_;
+	struct mapping *m;
+	struct hash_elem *e;
+	struct thread *t = thread_current();
+	m_.mapid = mapping;
+	e = hash_find(&t->mapids, &m_.elem);
+	if (e != NULL) {
+		m = hash_entry(e, struct mapping, elem);
+	} else {
+		return;
+	}
 
-    munmap_mapping(m, t);
+	munmap_mapping(m, t);
 }
 
 static void munmap_mapping (struct mapping *m, struct thread *t) {
-    void *addr = m->addr;
-    int i;
-    /* write back to file */
-    for (i = 1; i <= m->pnum; i++) {
-        struct page *p = page_lookup(addr, t);
-        ASSERT((p != NULL) && (p->type == MMAP));
-        release_mmap_page(p);
-        hash_delete(&t->page_table, &p->hash_elem);
-        free(p);
-        addr += PGSIZE;
-    }
+	void *addr = m->addr;
+	int i;
+	/* write back to file */
+	for (i = 1; i <= m->pnum; i++) {
+		struct page *p = page_lookup(addr, t);
+		ASSERT((p != NULL) && (p->type == MMAP));
+		release_mmap_page(p);
+		hash_delete(&t->page_table, &p->hash_elem);
+		free(p);
+		addr += PGSIZE;
+	}
 
-    hash_delete(&t->mapids, &m->elem);
+	hash_delete(&t->mapids, &m->elem);
+}
+
+/* Changes the current working directory of the process to dir, which
+   may be relative or absolute. Returns true if successful, false on failure. */
+static bool chdir (const char *dir) {
+	bool success = filesys_chdir(dir);
+	return success;
+}
+
+/* Creates the directory named dir, which may be relative or absolute.
+   Returns true if successful, false on failure. Fails if dir already
+   exists or if any directory name in dir, besides the last, does not
+   already exist. That is, mkdir("/a/b/c") succeeds only if /a/b
+   already exists and /a/b/c does not. */
+static bool mkdir (const char *dir) {
+
+	/* Initially a directory has two entries "." and ".." */
+	bool success = filesys_create(dir, 2 * DIR_ENTRY, true);
+
+	return success;
+}
+
+/* Reads a directory entry from file descriptor fd, which must
+   represent a directory. If successful, stores the null-terminated
+   file name in name, which must have room for READDIR_MAX_LEN + 1
+   bytes, and returns true. If no entries are left in the directory,
+   returns false.
+   . and .. should not be returned by readdir. */
+static bool readdir (int fd, char *name) {
+	if (!thread_fd_is_dir(fd)) return false;
+
+	struct dir *dir = thread_fd_to_dir(fd);
+	if (dir == NULL) return false;
+
+	do{
+	  if (!dir_readdir(dir, name)) return false;
+	}while((strcmp(name, ".") == 0) || (strcmp(name, "..") == 0));
+
+	return true;
+}
+
+/* Returns true if fd represents a directory, false if it represents
+   an ordinary file. */
+static bool isdir (int fd) {
+	return thread_fd_is_dir(fd);
+}
+
+/* Returns the inode number of the inode associated with fd, which may
+   represent an ordinary file or a directory. */
+static int inumber (int fd) {
+	if (thread_fd_is_dir(fd)) {
+		struct dir *dir = thread_fd_to_dir(fd);
+		ASSERT (dir != NULL);
+		return inode_get_inumber(dir_get_inode(dir));
+	} else {
+		struct file *file = thread_fd_to_file(fd);
+		ASSERT (file != NULL);
+		return inode_get_inumber(file_get_inode(file));
+	}
 }

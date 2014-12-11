@@ -17,7 +17,7 @@ struct lock exec_list_lock;		 /* Lock of the exec_threads_table */
 /* exec_threads_table entry */
 struct exec_threads {
   struct hash_elem hash_elem;   /* Hash table element */
-  char exec_name[16];           /* Executable file name */
+  block_sector_t inumber;       /* Executable file inumber */
   struct list threads;          /* List of threads. */
 };
 
@@ -48,7 +48,7 @@ struct page {
 unsigned exec_threads_hash (const struct hash_elem *e_, void *aux UNUSED);
 bool exec_threads_less (const struct hash_elem *a_, const struct hash_elem *b_,
                         void *aux UNUSED);
-struct exec_threads * exec_threads_lookup (char *exec_name);
+struct exec_threads * exec_threads_lookup (block_sector_t inumber);
 unsigned page_hash (const struct hash_elem *p_, void *aux UNUSED);
 bool page_less (const struct hash_elem *a_, const struct hash_elem *b_,
                 void *aux UNUSED);
@@ -65,6 +65,6 @@ void evict_mmap_page (struct page *p);
 void page_destructor (struct hash_elem *p_, void *aux UNUSED);
 void swap_in (struct page *p);
 void swap_out (struct page *p, void *k_addr);
-void add_exec_threads_entry (struct thread *t);
+void add_exec_threads_entry (struct thread *t, struct file *file);
 void remove_exec_threads_entry (struct thread *t);
 #endif /* vm/page.h */

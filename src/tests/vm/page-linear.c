@@ -6,7 +6,7 @@
 #include "tests/lib.h"
 #include "tests/main.h"
 
-#define SIZE (2 * 1024 * 1024)
+#define SIZE (2 * 1024 * 1024) 
 
 static char buf[SIZE];
 

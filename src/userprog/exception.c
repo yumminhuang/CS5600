@@ -7,6 +7,7 @@
 #include "threads/vaddr.h"
 #include "userprog/syscall.h"
 #include "vm/page.h"
+#include "filesys/cache.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -153,22 +154,23 @@ page_fault (struct intr_frame *f)
   user = (f->error_code & PF_U) != 0;
 
   valid = false;
-  if (user && not_present && is_user_vaddr (fault_addr)
+  if (user && not_present && is_user_vaddr (fault_addr) 
       && (fault_addr >= USER_VADDR_BOTTOM)) {
     struct page *p = page_lookup (fault_addr, thread_current ());
     if (p) {
       valid = load_page (p, false);
-    }
-
+    } 
+	
 	else if (fault_addr >= f->esp - STACK_GROWTH_HEURISTIC) {
 	  if (PHYS_BASE - pg_round_down (fault_addr) <= MAX_STACK_SIZE)	 {
 		  valid = grow_stack (fault_addr, false, NULL);
 	  }
 
-	}
+	}	
   }
-
+  
   if (!user) {
+    set_cache_exiting();
     kill (f);
   }
 
